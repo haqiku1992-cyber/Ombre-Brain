@@ -3537,7 +3537,7 @@ async def api_env_config_set(request: Request) -> Response:
         # 6. Embed 配置变更 → 完整重建 embedding_engine
         if var in ("OMBRE_EMBED_API_KEY", "OMBRE_EMBED_BASE_URL", "OMBRE_EMBED_MODEL", "OMBRE_EMBED_FORMAT"):
             try:
-                emb_cfg = config.setdefault("embedding", {})
+                config.setdefault("embedding", {})
                 # key 被清空 → 禁用
                 if var == "OMBRE_EMBED_API_KEY" and not value:
                     embedding_engine._backend = None  # type: ignore[attr-defined]

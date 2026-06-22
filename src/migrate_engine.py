@@ -35,7 +35,7 @@ import sqlite3
 import tempfile
 import uuid
 import zipfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Optional
 
 import frontmatter

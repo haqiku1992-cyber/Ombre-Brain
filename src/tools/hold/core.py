@@ -45,10 +45,15 @@ async def store_core(
             f"API key 未配置或调用失败，打标无法完成，桶未创建。请检查 OMBRE_COMPRESS_API_KEY。（错误：{e}）"
         ) from e
 
-    domain = analysis["domain"]
-    final_valence = valence if 0 <= valence <= 1 else analysis["valence"]
-    final_arousal = arousal if 0 <= arousal <= 1 else analysis["arousal"]
-    all_tags = list(dict.fromkeys(analysis["tags"] + extra_tags))
+    domain = analysis.get("domain") or ["未分类"]
+    if not isinstance(domain, list):
+        domain = ["未分类"]
+    _v = analysis.get("valence", 0.5)
+    _a = analysis.get("arousal", 0.3)
+    final_valence = valence if 0 <= valence <= 1 else (float(_v) if _v is not None else 0.5)
+    final_arousal = arousal if 0 <= arousal <= 1 else (float(_a) if _a is not None else 0.3)
+    _raw_tags = analysis.get("tags") or []
+    all_tags = list(dict.fromkeys((_raw_tags if isinstance(_raw_tags, list) else []) + extra_tags))
     suggested_name = analysis.get("suggested_name", "")
 
     result_name, is_merged, embed_warn = await merge_or_create(
