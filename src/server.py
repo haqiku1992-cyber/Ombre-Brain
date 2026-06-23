@@ -4287,6 +4287,25 @@ async def api_version(request: Request) -> Response:
 
 
 # =============================================================
+# /api/update-info — 前端版本检查面板所需的部署元信息
+# 公开端点：仅返回非敏感信息（版本、是否Docker、端口、数据目录）
+# =============================================================
+@mcp.custom_route("/api/update-info", methods=["GET"])
+async def api_update_info(request: Request) -> Response:
+    from starlette.responses import JSONResponse
+    import os as _os
+    is_docker = _os.path.exists("/.dockerenv")
+    container_name = _os.environ.get("OMBRE_CONTAINER_NAME", "ombre-brain")
+    return JSONResponse({
+        "version": __version__,
+        "is_docker": is_docker,
+        "container_name": container_name,
+        "port": int(config.get("port") or 8000),
+        "data_dir": str(config.get("buckets_dir") or "（未知）"),
+    })
+
+
+# =============================================================
 # /api/author — iter 1.7 §H 作者有话说（静态文本，公开）
 # 这段文字由作者本人维护，前端只读展示，不开放编辑。
 # 把它写成模块级常量 dict，是因为：

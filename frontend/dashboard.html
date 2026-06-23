@@ -1321,6 +1321,40 @@
     flex-shrink: 0;
   }
   .embed-warn-btn:hover { background: rgba(184,151,98,0.18); }
+
+  /* ====== ⓪ 版本 & 更新 面板 ====== */
+  #sec-version { background: rgba(194,152,47,0.03); border: 1px solid rgba(194,152,47,0.22); }
+  #sec-version h3 { color: var(--accent); }
+  .ver-status-row { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin:10px 0 0; }
+  .ver-badge {
+    display:inline-flex; align-items:center; gap:5px;
+    padding:3px 11px; border-radius:10px; font-size:11px; font-weight:500; letter-spacing:0.3px;
+  }
+  .ver-badge-ok  { background:rgba(126,173,104,0.16); color:var(--positive); border:1px solid rgba(126,173,104,0.38); }
+  .ver-badge-new { background:rgba(184,92,60,0.11);   color:var(--negative); border:1px solid rgba(184,92,60,0.38); }
+  #ver-update-panel {
+    margin-top:16px; padding:14px 16px;
+    background:var(--surface-solid); border:1px solid var(--border); border-radius:6px;
+  }
+  .ver-deploy-info, .ver-cmd-box {
+    font-family:'Share Tech Mono',monospace; font-size:12px; line-height:1.75;
+    background:var(--lcd); color:var(--lcd-text);
+    padding:10px 14px; border-radius:4px; margin:6px 0;
+    white-space:pre; overflow-x:auto;
+  }
+  .ver-cmd-box { cursor:text; user-select:all; }
+  .ver-notes-box {
+    max-height:140px; overflow-y:auto; font-size:12px; line-height:1.7;
+    color:var(--text-dim); padding:8px 12px; background:var(--surface);
+    border:1px solid var(--border); border-radius:4px; margin:6px 0;
+    white-space:pre-wrap; font-family:'Share Tech Mono',monospace;
+  }
+  .ver-checklist { margin:8px 0 6px; padding:0; }
+  .ver-checklist li {
+    font-size:12px; color:var(--text-dim); margin:5px 0;
+    list-style:none; display:flex; align-items:flex-start; gap:7px;
+  }
+
   /* Model-list dropdown panel */
   .model-list-dropdown {
     display: none;
@@ -2054,12 +2088,60 @@
 <div class="content" id="settings-view" style="display:none">
   <div style="max-width:680px;margin:0 auto;">
 
-    <!-- 顶部引导 + 6 锚点 -->
+    <!-- ⓪ 版本 & 更新 -->
+    <div class="config-section" id="sec-version">
+      <h3>⓪ 版本 & 更新</h3>
+      <div class="ver-status-row">
+        <span style="font-size:13px;">当前版本：<b id="ver-local-disp">…</b></span>
+        <button class="btn-secondary" onclick="checkGitHubVersion()" id="btn-check-ver" style="height:30px;padding:0 14px;font-size:12px;display:inline-flex;align-items:center;gap:5px;">
+          <i data-lucide="refresh-cw"></i> 检查 GitHub 更新
+        </button>
+        <span id="ver-checking" style="display:none;font-size:12px;color:var(--text-dim);">检查中…</span>
+        <span class="ver-badge ver-badge-ok"  id="ver-badge-ok"  style="display:none;">✓ 已是最新</span>
+        <span class="ver-badge ver-badge-new" id="ver-badge-new" style="display:none;">⬆ 有新版本</span>
+        <span id="ver-error" style="display:none;font-size:12px;color:var(--negative);"></span>
+      </div>
+
+      <!-- 有新版本时显示的完整更新引导面板 -->
+      <div id="ver-update-panel" style="display:none">
+        <div style="font-weight:600;font-size:13px;margin-bottom:6px;">
+          最新版本：<span id="ver-remote-disp" style="color:var(--accent)">—</span>
+          <span id="ver-remote-date" style="font-size:11px;color:var(--text-dim);font-weight:400;margin-left:8px;"></span>
+        </div>
+
+        <div style="font-size:12px;font-weight:600;color:var(--text-dim);margin:10px 0 4px;">更新说明</div>
+        <div class="ver-notes-box" id="ver-notes-box">—</div>
+
+        <div style="font-size:12px;font-weight:600;color:var(--warning);margin:14px 0 6px;">⚠ 更新前请先完成以下步骤</div>
+        <ul class="ver-checklist">
+          <li><span style="color:var(--accent);font-weight:600;">①</span> <span>截图或记录下方「当前部署信息」（端口、目录、访问地址等）</span></li>
+          <li><span style="color:var(--accent);font-weight:600;">②</span> <span>点「导出记忆备份」下载 .zip 存档，更新后如有问题可从「导入」恢复</span></li>
+          <li><span style="color:var(--accent);font-weight:600;">③</span> <span>在 VPS / 宿主机执行下方更新命令，完成后确认服务已恢复</span></li>
+        </ul>
+
+        <div style="font-size:12px;font-weight:600;color:var(--text-dim);margin:10px 0 4px;">当前部署信息（建议截图）</div>
+        <div class="ver-deploy-info" id="ver-deploy-info">载入中…</div>
+
+        <div style="display:flex;gap:8px;align-items:center;margin:12px 0 4px;">
+          <button class="btn-primary" onclick="downloadExport()" style="height:34px;padding:0 14px;font-size:12px;display:inline-flex;align-items:center;gap:5px;">
+            <i data-lucide="download"></i> 导出记忆备份
+          </button>
+          <span style="font-size:11px;color:var(--text-dim);">下载 .zip，包含所有 bucket + embedding 数据库</span>
+        </div>
+
+        <div style="font-size:12px;font-weight:600;color:var(--text-dim);margin:14px 0 4px;">更新命令（在 VPS / 宿主机执行）</div>
+        <div class="ver-cmd-box" id="ver-cmd-box" title="点击可全选，Ctrl+C 复制">—</div>
+        <div style="font-size:11px;color:var(--text-dim);margin-top:2px;">点击命令框即全选，Ctrl+C 复制后在宿主机终端粘贴执行</div>
+      </div>
+    </div>
+
+    <!-- 顶部引导 + 锚点 -->
     <div class="config-section" style="background:rgba(0,0,0,0.025);">
       <div style="font-size:13px;color:var(--text-dim);line-height:1.7;">
         所有项都直接显示当前生效的值，可以在此处改。每一组下方的「保存」按钮会立刻写入 .env / config.yaml / 各设置接口。
       </div>
       <div style="margin-top:12px;display:flex;flex-wrap:wrap;gap:6px;font-size:12px;">
+        <a href="#sec-version" style="padding:4px 10px;border:1px solid rgba(194,152,47,0.4);border-radius:14px;text-decoration:none;color:var(--accent);">⓪ 版本 & 更新</a>
         <a href="#sec-me" style="padding:4px 10px;border:1px solid var(--border,#ddd);border-radius:14px;text-decoration:none;color:var(--text);">① 我</a>
         <a href="#sec-service" style="padding:4px 10px;border:1px solid var(--border,#ddd);border-radius:14px;text-decoration:none;color:var(--text);">② 服务</a>
         <a href="#sec-engine" style="padding:4px 10px;border:1px solid var(--border,#ddd);border-radius:14px;text-decoration:none;color:var(--text);">③ 引擎</a>
@@ -5438,16 +5520,134 @@ async function saveConfig(persist) {
 checkAuth().then(authed => { if (authed) loadBuckets(); });
 
 // ====== iter 1.7: version badge, plan kanban, about page ======
+var _obLocalVersion = null;
+
 async function loadVersionBadge() {
   try {
     const r = await fetch(BASE + '/api/version');
     const d = await r.json();
+    _obLocalVersion = d.version || null;
     const el = document.getElementById('version-badge');
     if (el && d.version) el.textContent = 'v' + d.version;
     document.title = 'Ombre Brain · v' + (d.version || '');
+    // 同步填入版本面板
+    const vl = document.getElementById('ver-local-disp');
+    if (vl && d.version) vl.textContent = 'v' + d.version;
   } catch(_) {}
 }
 loadVersionBadge();
+
+// ====== ⓪ 版本 & 更新 ======
+(function() {
+  var _deployInfo = null;
+
+  function semverGt(a, b) {
+    var pa = String(a).replace(/^v/, '').split('.').map(Number);
+    var pb = String(b).replace(/^v/, '').split('.').map(Number);
+    for (var i = 0; i < 3; i++) {
+      var na = pa[i] || 0, nb = pb[i] || 0;
+      if (na > nb) return true;
+      if (na < nb) return false;
+    }
+    return false;
+  }
+
+  async function loadDeployInfo() {
+    if (_deployInfo) return _deployInfo;
+    try {
+      const r = await fetch(BASE + '/api/update-info');
+      _deployInfo = await r.json();
+    } catch(_) { _deployInfo = {}; }
+    return _deployInfo;
+  }
+
+  async function showUpdatePanel(gh, latestTag) {
+    var panel = document.getElementById('ver-update-panel');
+    if (!panel) return;
+
+    var remDisp = document.getElementById('ver-remote-disp');
+    if (remDisp) remDisp.textContent = 'v' + latestTag;
+
+    var remDate = document.getElementById('ver-remote-date');
+    if (remDate && gh.published_at) remDate.textContent = gh.published_at.slice(0, 10) + ' 发布';
+
+    var notesBox = document.getElementById('ver-notes-box');
+    if (notesBox) {
+      var body = (gh.body || '（无更新说明）').slice(0, 700);
+      if ((gh.body || '').length > 700) body += '\n…（完整说明见 GitHub Release）';
+      notesBox.textContent = body;
+    }
+
+    var info = await loadDeployInfo();
+    var deployEl = document.getElementById('ver-deploy-info');
+    if (deployEl) {
+      deployEl.textContent = [
+        '当前版本  : v' + (info.version || _obLocalVersion || '?'),
+        '部署方式  : ' + (info.is_docker ? 'Docker 容器' : '裸机 / git'),
+        '服务端口  : ' + (info.port || location.port || '8000'),
+        '数据目录  : ' + (info.data_dir || '（未知）'),
+        '访问地址  : ' + location.origin,
+      ].join('\n');
+    }
+
+    var cmdEl = document.getElementById('ver-cmd-box');
+    if (cmdEl) {
+      if (info.is_docker) {
+        var cname = info.container_name || 'ombre-brain';
+        cmdEl.textContent = 'docker pull p0luz/ombre-brain:latest\ndocker restart ' + cname;
+      } else {
+        cmdEl.textContent = 'cd /path/to/ombre-brain\ngit pull origin main\n# 然后重启服务（systemctl / pm2 / screen 等）';
+      }
+    }
+
+    panel.style.display = '';
+  }
+
+  window.checkGitHubVersion = async function() {
+    var btnCheck  = document.getElementById('btn-check-ver');
+    var checking  = document.getElementById('ver-checking');
+    var badgeOk   = document.getElementById('ver-badge-ok');
+    var badgeNew  = document.getElementById('ver-badge-new');
+    var errEl     = document.getElementById('ver-error');
+    var panel     = document.getElementById('ver-update-panel');
+
+    [badgeOk, badgeNew, errEl, panel].forEach(function(e) { if (e) e.style.display = 'none'; });
+    if (btnCheck) btnCheck.disabled = true;
+    if (checking) checking.style.display = '';
+
+    try {
+      if (!_obLocalVersion) {
+        const rv = await fetch(BASE + '/api/version');
+        const dv = await rv.json();
+        _obLocalVersion = dv.version || '0.0.0';
+        const vl = document.getElementById('ver-local-disp');
+        if (vl) vl.textContent = 'v' + _obLocalVersion;
+      }
+
+      const r = await fetch('https://api.github.com/repos/P0luz/Ombre-Brain/releases/latest', {
+        headers: { 'Accept': 'application/vnd.github.v3+json' }
+      });
+      if (!r.ok) throw new Error('GitHub API 返回 ' + r.status + '，稍后重试');
+      const gh = await r.json();
+      const latestTag = (gh.tag_name || '').replace(/^v/, '');
+      if (!latestTag) throw new Error('无法解析 GitHub tag_name');
+
+      if (checking) checking.style.display = 'none';
+      if (btnCheck) btnCheck.disabled = false;
+
+      if (semverGt(latestTag, _obLocalVersion)) {
+        if (badgeNew) badgeNew.style.display = '';
+        await showUpdatePanel(gh, latestTag);
+      } else {
+        if (badgeOk) badgeOk.style.display = '';
+      }
+    } catch (e) {
+      if (checking) checking.style.display = 'none';
+      if (btnCheck) btnCheck.disabled = false;
+      if (errEl) { errEl.textContent = '检查失败：' + e.message; errEl.style.display = ''; }
+    }
+  };
+})();
 
 function _planCard(p) {
   var name = esc(p.name || (p.content || '').slice(0, 40) || p.id);
