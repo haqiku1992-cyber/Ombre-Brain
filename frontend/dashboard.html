@@ -5573,8 +5573,8 @@ loadVersionBadge();
 
     var notesBox = document.getElementById('ver-notes-box');
     if (notesBox) {
-      var body = (gh.body || '（无更新说明）').slice(0, 700);
-      if ((gh.body || '').length > 700) body += '\n…（完整说明见 GitHub Release）';
+      var body = gh.body ? gh.body.slice(0, 700) : '（作者尚未发布正式 Release 说明，可前往 GitHub 查看提交记录）';
+      if (gh.body && gh.body.length > 700) body += '\n…（完整说明见 GitHub Release）';
       notesBox.textContent = body;
     }
 
@@ -5624,20 +5624,26 @@ loadVersionBadge();
         if (vl) vl.textContent = 'v' + _obLocalVersion;
       }
 
-      const r = await fetch('https://api.github.com/repos/P0luz/Ombre-Brain/releases/latest', {
-        headers: { 'Accept': 'application/vnd.github.v3+json' }
-      });
-      if (!r.ok) throw new Error('GitHub API 返回 ' + r.status + '，稍后重试');
-      const gh = await r.json();
-      const latestTag = (gh.tag_name || '').replace(/^v/, '');
-      if (!latestTag) throw new Error('无法解析 GitHub tag_name');
+      // 从 raw GitHub 读 VERSION 文件，不依赖是否发布过 Release
+      const rRaw = await fetch('https://raw.githubusercontent.com/P0luz/Ombre-Brain/main/VERSION');
+      if (!rRaw.ok) throw new Error('无法读取 GitHub VERSION 文件（' + rRaw.status + '）');
+      const latestTag = (await rRaw.text()).trim().replace(/^v/, '');
+      if (!latestTag) throw new Error('GitHub VERSION 文件为空');
+
+      // 尝试读 Release 说明（无 Release 时静默忽略）
+      var ghRelease = {};
+      try {
+        const rRel = await fetch('https://api.github.com/repos/P0luz/Ombre-Brain/releases/latest',
+          { headers: { 'Accept': 'application/vnd.github.v3+json' } });
+        if (rRel.ok) ghRelease = await rRel.json();
+      } catch(_) {}
 
       if (checking) checking.style.display = 'none';
       if (btnCheck) btnCheck.disabled = false;
 
       if (semverGt(latestTag, _obLocalVersion)) {
         if (badgeNew) badgeNew.style.display = '';
-        await showUpdatePanel(gh, latestTag);
+        await showUpdatePanel(ghRelease, latestTag);
       } else {
         if (badgeOk) badgeOk.style.display = '';
       }
