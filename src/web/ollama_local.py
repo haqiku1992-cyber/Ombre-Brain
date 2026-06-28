@@ -30,7 +30,9 @@ import platform
 import asyncio
 import subprocess
 import zipfile
+import stat
 import threading
+import urllib.parse
 import urllib.request
 
 import httpx
@@ -200,17 +202,52 @@ def _bin_url(mirror: str, osk: str, arch: str) -> str:
     return f"{base}/{name}"
 
 
-def _extract_zst(path: str, dest: str) -> bool:
-    """解 .tar.zst 到 dest。优先系统 tar（--zstd / unzstd），回退 python zstandard。成功 True。"""
-    for cmd in (
-        ["tar", "--zstd", "-xf", path, "-C", dest],
-        ["tar", "--use-compress-program=unzstd", "-xf", path, "-C", dest],
-    ):
-        try:
-            if subprocess.run(cmd, capture_output=True, timeout=600).returncode == 0:
-                return True
-        except Exception:
+def _safe_archive_target(dest: str, member_name: str) -> str:
+    if not member_name or os.path.isabs(member_name):
+        raise ValueError(f"unsafe archive member path: {member_name!r}")
+    base = os.path.realpath(dest)
+    target = os.path.realpath(os.path.join(base, member_name))
+    if os.path.commonpath([base, target]) != base:
+        raise ValueError(f"archive member escapes target dir: {member_name!r}")
+    return target
+
+
+def _safe_extract_zip(zf: zipfile.ZipFile, dest: str) -> None:
+    os.makedirs(dest, exist_ok=True)
+    for info in zf.infolist():
+        target = _safe_archive_target(dest, info.filename)
+        mode = (info.external_attr >> 16) & 0o170000
+        if mode in (stat.S_IFLNK, stat.S_IFSOCK, stat.S_IFIFO, stat.S_IFCHR, stat.S_IFBLK):
+            raise ValueError(f"unsafe archive member type: {info.filename!r}")
+        if info.is_dir():
+            os.makedirs(target, exist_ok=True)
             continue
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        with zf.open(info) as src, open(target, "wb") as dst:
+            shutil.copyfileobj(src, dst)
+
+
+def _safe_extract_tar(tf, dest: str) -> None:
+    os.makedirs(dest, exist_ok=True)
+    for member in tf:
+        target = _safe_archive_target(dest, member.name)
+        if member.issym() or member.islnk() or member.isdev() or member.isfifo():
+            raise ValueError(f"unsafe archive member type: {member.name!r}")
+        if member.isdir():
+            os.makedirs(target, exist_ok=True)
+            continue
+        if not member.isfile():
+            raise ValueError(f"unsupported archive member type: {member.name!r}")
+        src = tf.extractfile(member)
+        if src is None:
+            raise ValueError(f"could not read archive member: {member.name!r}")
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        with src, open(target, "wb") as dst:
+            shutil.copyfileobj(src, dst)
+
+
+def _extract_zst(path: str, dest: str) -> bool:
+    """解 .tar.zst 到 dest。逐成员校验路径和类型后再写入。成功 True。"""
     try:
         import io as _io
         import tarfile as _tf
@@ -218,16 +255,25 @@ def _extract_zst(path: str, dest: str) -> bool:
         with open(path, "rb") as f:
             with zstandard.ZstdDecompressor().stream_reader(f) as reader:
                 with _tf.open(fileobj=_io.BufferedReader(reader), mode="r|") as t:
-                    t.extractall(dest)
+                    _safe_extract_tar(t, dest)
         return True
     except Exception:
         return False
 
 
+def _validate_download_url(url: str) -> str:
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ValueError("download URL must be http(s)")
+    return url
+
+
 def _download(url: str, dest: str) -> None:
     """流式下载，进度写 _install_state['percent']。"""
-    req = urllib.request.Request(url, headers={"User-Agent": "OmbreBrain-Setup"})
-    with urllib.request.urlopen(req, timeout=60) as resp:
+    safe_url = _validate_download_url(url)
+    req = urllib.request.Request(safe_url, headers={"User-Agent": "OmbreBrain-Setup"})
+    # URL scheme is validated above; urllib is used for streaming installer downloads.
+    with urllib.request.urlopen(req, timeout=60) as resp:  # nosec B310
         total = int(resp.headers.get("Content-Length") or 0)
         done = 0
         with open(dest, "wb") as f:
@@ -273,7 +319,7 @@ def _install_run(osk: str, arch: str, mirror: str) -> None:
             os.makedirs(root, exist_ok=True)
             if not _extract_zst(tzst, root):  # 解出 bin/ollama + lib/
                 raise RuntimeError(
-                    "解压 .tar.zst 失败（系统缺 zstd/tar 支持）。"
+                    "解压 .tar.zst 失败（缺少 Python zstandard 支持或安装包异常）。"
                     "可改用官方脚本：curl -fsSL https://ollama.com/install.sh | sh"
                 )
             binp = os.path.join(root, "bin", "ollama")
@@ -287,7 +333,7 @@ def _install_run(osk: str, arch: str, mirror: str) -> None:
             root = _user_install_root()
             os.makedirs(root, exist_ok=True)
             with zipfile.ZipFile(zp) as z:
-                z.extractall(root)
+                _safe_extract_zip(z, root)
             binp = os.path.join(root, "Ollama.app", "Contents", "Resources", "ollama")
             if os.path.isfile(binp):
                 os.chmod(binp, 0o755)

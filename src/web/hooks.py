@@ -1,17 +1,20 @@
 """
 ========================================
-web/hooks.py — breath / dream 浮现挂载点（webhook，公开 GET）
+web/hooks.py — breath / dream 浮现挂载点（HTTP hook）
 ========================================
 
 - /breath-hook：对话开头由外部 hook 拉取，返回应浮现的记忆（pinned + 未解决采样）
 - /dream-hook：dream 专用，返回最近窗口内可做梦的候选
 
-给外部 SessionStart hook / 自动化用，无需登录鉴权；通过 sh.fire_webhook 推送事件。
+给外部 SessionStart hook / 自动化用；默认需要 Dashboard 登录态或 hook token。
+通过 sh.fire_webhook 推送事件。
 
 对外暴露：register(mcp)。
 ========================================
 """
 
+import hmac
+import os
 import random
 
 from starlette.requests import Request
@@ -27,11 +30,64 @@ except ImportError:  # pragma: no cover
     from ..utils import strip_wikilinks, count_tokens_approx  # type: ignore
 
 
+def _truthy(value) -> bool:
+    return str(value or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _hook_setting(name: str, default=None):
+    hooks_cfg = (getattr(sh, "config", {}) or {}).get("hooks") or {}
+    return hooks_cfg.get(name, default)
+
+
+def _header_value(request, name: str) -> str:
+    headers = getattr(request, "headers", {}) or {}
+    try:
+        return str(headers.get(name, "") or "")
+    except Exception:
+        wanted = name.lower()
+        for k, v in dict(headers).items():
+            if str(k).lower() == wanted:
+                return str(v or "")
+    return ""
+
+
+def _is_hook_request_authorized(request) -> bool:
+    """Protect hook endpoints that can expose memory text.
+
+    Public hooks can still be enabled deliberately with OMBRE_HOOK_ALLOW_PUBLIC=1
+    or config hooks.allow_public=true. Otherwise a dashboard session or a hook
+    token is required.
+    """
+    allow_public = _truthy(os.environ.get("OMBRE_HOOK_ALLOW_PUBLIC")) or _truthy(
+        _hook_setting("allow_public")
+    )
+    if allow_public:
+        return True
+
+    token = (os.environ.get("OMBRE_HOOK_TOKEN") or str(_hook_setting("token", "") or "")).strip()
+    if token:
+        auth = _header_value(request, "authorization")
+        supplied = [
+            str((getattr(request, "query_params", {}) or {}).get("token", "") or ""),
+            _header_value(request, "x-ombre-hook-token"),
+            auth[7:] if auth.startswith("Bearer ") else "",
+        ]
+        if any(v and hmac.compare_digest(v, token) for v in supplied):
+            return True
+
+    try:
+        return bool(sh._is_authenticated(request))
+    except Exception:
+        return False
+
+
 def register(mcp) -> None:
 
     @mcp.custom_route("/breath-hook", methods=["GET"])
     async def breath_hook(request):
         from starlette.responses import PlainTextResponse
+        if not _is_hook_request_authorized(request):
+            return PlainTextResponse("", status_code=401)
         try:
             all_buckets = await sh.bucket_mgr.list_all(include_archive=False)
             # pinned
@@ -146,6 +202,8 @@ def register(mcp) -> None:
     @mcp.custom_route("/dream-hook", methods=["GET"])
     async def dream_hook(request):
         from starlette.responses import PlainTextResponse
+        if not _is_hook_request_authorized(request):
+            return PlainTextResponse("", status_code=401)
         try:
             all_buckets = await sh.bucket_mgr.list_all(include_archive=False)
             candidates = [

@@ -105,6 +105,20 @@ def _mcp_auth_check(request: Request):
     return False
 
 
+def _validate_authorize_redirect(client_id: str, redirect_uri: str) -> tuple[bool, str]:
+    """Validate OAuth dynamic client and exact redirect_uri before asking for a password."""
+    if not client_id:
+        return False, "missing client_id"
+    if not redirect_uri:
+        return False, "missing redirect_uri"
+    client_info = _oauth_clients.get(client_id)
+    if not client_info:
+        return False, "unknown client_id"
+    if redirect_uri not in (client_info.get("redirect_uris") or []):
+        return False, "redirect_uri mismatch"
+    return True, ""
+
+
 def _oauth_authorize_html(client_id: str, redirect_uri: str, state: str,
                            code_challenge: str, error: str = "") -> str:
     e = _html_escape.escape
@@ -205,10 +219,13 @@ def register(mcp) -> None:
         from starlette.responses import HTMLResponse, RedirectResponse
         if request.method == "GET":
             p = dict(request.query_params)
+            ok, err = _validate_authorize_redirect(
+                p.get("client_id", ""), p.get("redirect_uri", "")
+            )
             return HTMLResponse(_oauth_authorize_html(
                 p.get("client_id", ""), p.get("redirect_uri", ""),
-                p.get("state", ""), p.get("code_challenge", ""),
-            ))
+                p.get("state", ""), p.get("code_challenge", ""), error=err,
+            ), status_code=200 if ok else 400)
         # POST
         form = await request.form()
         password     = str(form.get("password", ""))
@@ -217,17 +234,15 @@ def register(mcp) -> None:
         state        = str(form.get("state", ""))
         code_challenge = str(form.get("code_challenge", ""))
 
+        ok, err = _validate_authorize_redirect(client_id, redirect_uri)
+        if not ok:
+            return HTMLResponse(_oauth_authorize_html(
+                client_id, redirect_uri, state, code_challenge, error=err
+            ), status_code=400)
         if not sh._verify_any_password(password):
             return HTMLResponse(_oauth_authorize_html(
                 client_id, redirect_uri, state, code_challenge, error="密码错误，请重试"
             ), status_code=401)
-
-        client_info = _oauth_clients.get(client_id)
-        if client_info and redirect_uri not in client_info.get("redirect_uris", []):
-            return HTMLResponse(_oauth_authorize_html(
-                client_id, redirect_uri, state, code_challenge,
-                error="redirect_uri 与注册不符，拒绝授权"
-            ), status_code=400)
 
         code = secrets.token_urlsafe(32)
         _oauth_codes[code] = {

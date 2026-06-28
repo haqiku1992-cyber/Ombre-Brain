@@ -362,6 +362,15 @@ def register(mcp) -> None:
                 cfg_emb["backend"] = target_backend
                 cfg_emb["enabled"] = True
                 _yaml_updates: dict = {"backend": target_backend, "enabled": True}
+                # 持久化真实向量维度。迁移过程已生成过向量，target_backend_obj 的 _dim
+                # 此刻是该模型的真实输出维度（如 bge-m3=1024）。若不落盘 dim，重启后
+                # EmbeddingEngine 会按 openai_compat 默认 768 重新初始化 → 与 db(1024)
+                # 对账误报 OB-W005、且重算十几遍/redeploy 都不消失（每次都在向量自校正
+                # 之前对账）。这里把真实维度一并写进 config.yaml，重启即维度一致。
+                _real_dim = target_backend_obj.vector_dim() if target_backend_obj else 0
+                if _real_dim:
+                    cfg_emb["dim"] = _real_dim
+                    _yaml_updates["dim"] = _real_dim
                 if req_api_format:
                     cfg_emb["api_format"] = req_api_format
                     _yaml_updates["api_format"] = req_api_format

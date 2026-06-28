@@ -118,11 +118,15 @@ def register(mcp) -> None:
                 yield "data: 正在连接 GitHub…\n\n"
                 await _asyncio.sleep(0.1)
 
+                # #4a ③：更新源可配（update.repo / update.ref），默认官方 main。
+                _ucfg = getattr(sh, "config", {}) or {}
+                _ucfg = _ucfg.get("update") or {}
+                _repo = str(_ucfg.get("repo") or "P0luz/Ombre-Brain").strip().strip("/")
+                _ref  = str(_ucfg.get("ref")  or "main").strip()
+                _zip_url = f"https://github.com/{_repo}/archive/refs/heads/{_ref}.zip"
                 async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client:
-                    yield "data: 正在下载最新版本 ZIP…\n\n"
-                    r = await client.get(
-                        "https://github.com/P0luz/Ombre-Brain/archive/refs/heads/main.zip"
-                    )
+                    yield f"data: 正在下载 {_repo}@{_ref} …\n\n"
+                    r = await client.get(_zip_url)
                     r.raise_for_status()
 
                 yield "data: 下载完成，正在解压文件…\n\n"
@@ -134,9 +138,30 @@ def register(mcp) -> None:
                 _repo_root = sh.repo_root
                 src_root      = _os.path.join(_repo_root, "src")
                 frontend_root = _os.path.join(_repo_root, "frontend")
+
+                # #4a ②：覆盖前把当前 src/frontend 备份成回滚点 _prev，坏更新崩溃时 entrypoint 还原。
+                import shutil as _shutil
+                _prev = _os.path.join(_repo_root, "_prev")
+                try:
+                    if _os.path.isdir(src_root):
+                        _shutil.rmtree(_prev, ignore_errors=True)
+                        _os.makedirs(_prev, exist_ok=True)
+                        _shutil.copytree(src_root, _os.path.join(_prev, "src"))
+                        if _os.path.isdir(frontend_root):
+                            _shutil.copytree(frontend_root, _os.path.join(_prev, "frontend"))
+                        _vcur = _os.path.join(_repo_root, "VERSION")
+                        if _os.path.isfile(_vcur):
+                            _shutil.copy2(_vcur, _os.path.join(_prev, "VERSION"))
+                        yield "data: 已备份当前版本为回滚点…\n\n"
+                except Exception as _bk:
+                    yield f"data: 备份回滚点失败（继续更新）：{_bk}\n\n"
+
                 with _zipfile.ZipFile(_io.BytesIO(zip_bytes)) as zf:
-                    prefix_src      = "Ombre-Brain-main/src/"
-                    prefix_frontend = "Ombre-Brain-main/frontend/"
+                    # 从 zip 顶层目录名推前缀（随分支/标签变化，不能写死 -main）。
+                    _names = zf.namelist()
+                    _top = (_names[0].split("/", 1)[0] + "/") if _names else "Ombre-Brain-main/"
+                    prefix_src      = _top + "src/"
+                    prefix_frontend = _top + "frontend/"
                     updated = 0
                     skipped = 0
                     for member in zf.namelist():
@@ -171,7 +196,7 @@ def register(mcp) -> None:
                     # 发版漏改一个就会出现「更新了一堆文件、版本号却原地不动」。这里在解压后
                     # 显式把 zip 里的根 VERSION 强制写到两处，保证更新后版本号一定刷新、不再漂移。
                     try:
-                        ver_bytes = zf.read("Ombre-Brain-main/VERSION")
+                        ver_bytes = zf.read(_top + "VERSION")
                         for _vpath in (
                             _os.path.join(_repo_root, "VERSION"),
                             _os.path.join(src_root, "VERSION"),
@@ -181,6 +206,31 @@ def register(mcp) -> None:
                         yield f"data: 版本号已同步为 v{ver_bytes.decode('utf-8', 'ignore').strip()}…\n\n"
                     except KeyError:
                         pass  # zip 里没有 VERSION（极少数情况）：跳过，不阻断更新
+
+                    # #4a ③：依赖变更 → best-effort pip install。
+                    # 热更新只覆盖 .py，新版若加了依赖、不装会 import 失败（被 ② 当启动失败回滚）。
+                    try:
+                        _new_req = zf.read(_top + "requirements.txt")
+                        _req_path = _os.path.join(_repo_root, "requirements.txt")
+                        _old_req = b""
+                        if _os.path.isfile(_req_path):
+                            with open(_req_path, "rb") as _rf:
+                                _old_req = _rf.read()
+                        if _new_req.strip() and _new_req.strip() != _old_req.strip():
+                            with open(_req_path, "wb") as _rf:
+                                _rf.write(_new_req)
+                            yield "data: 依赖清单有变化，正在 pip install…\n\n"
+                            import subprocess as _sp, sys as _sys
+                            _p = _sp.run(
+                                [_sys.executable, "-m", "pip", "install", "--no-cache-dir", "-r", _req_path],
+                                capture_output=True, text=True, timeout=600,
+                            )
+                            yield ("data: 依赖安装完成…\n\n" if _p.returncode == 0
+                                   else "data: 依赖安装失败（rootfs 可能只读）——若启动报缺包请重建镜像。\n\n")
+                    except KeyError:
+                        pass  # zip 里没有 requirements.txt：跳过
+                    except Exception as _rqe:
+                        yield f"data: 依赖处理跳过：{_rqe}\n\n"
 
                 yield f"data: 已更新 {updated} 个文件，即将重启服务…\n\n"
                 await _asyncio.sleep(0.5)
@@ -203,11 +253,10 @@ def register(mcp) -> None:
 
     @mcp.custom_route("/api/maintenance/fix-pinned-desync", methods=["GET", "POST"])
     async def api_fix_pinned_desync(request: Request) -> Response:
-        """修复「pinned 计数卡死」遗留的孤儿固化桶。
+        """扫描 pinned/type 脱钩项。
 
-        GET  → 只预演，返回孤儿清单（前端先展示「将处理 N 个」让用户确认）。
-        POST → 实际降级（type→dynamic、移出 permanent/，解开 score=999 权重卡死）。
-        两者都需登录。逻辑复用 tools._common.repair_pinned_desync，与命令行脚本同源。
+        type=permanent 是正式固化类型；当前不会自动降级未 pinned 的 permanent 桶。
+        两者都需登录。逻辑复用 tools._common.repair_pinned_desync。
         """
         from starlette.responses import JSONResponse
         err = sh._require_auth(request)
