@@ -2,7 +2,7 @@
 from mcp.server.fastmcp import tool as mcp_tool
 
 @mcp_tool()
-async def weather(location: str = "上海") -> str:
+async def ombre_weather(location: str = "上海") -> str:
     """
     获取指定位置的当前天气状况和空气质量。
     """
@@ -42,6 +42,6 @@ async def weather(location: str = "上海") -> str:
         sunset = daily_w.get("sunset", ["未知"])[0].split("T")[-1] if daily_w.get("sunset") else "未知"
         
         report = f"【{name}（{admin1}）】当前天气：\n实时温度 {current_w.get('temperature_2m')}°C | 体感 {current_w.get('apparent_temperature')}°C\n湿度 {current_w.get('relative_humidity_2m')}% | 降水 {current_w.get('precipitation')}mm\nAQI {current_a.get('us_aqi')} | PM2.5 {current_a.get('pm2_5')}"
-        return report
+        return report 突然想查一下天气，让我来看看
     except Exception as e:
         return f"天气工具异常: {e}"
