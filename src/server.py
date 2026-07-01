@@ -582,8 +582,11 @@ async def breath(
 # ... breath 函数结束 ...
 @mcp.tool()
 async def weather(location: str = "上海") -> str:
+    """获取天气"""
+    # 直接从 tools.weather 导入调用
+    from tools.weather import weather as _weather_func
     return await _with_notice(
-        _t_weather.weather(location=location),
+        _weather_func(location=location),
         op="weather",
         args={"location": location},
     )
