@@ -553,6 +553,10 @@ _tools_runtime.init(
 # 每个入口都不超过 10 行，便于一眼看清参数与归属
 # =============================================================
 @mcp.tool()
+async def test_weather() -> str:
+    """测试工具"""
+    return "天气工具测试成功"
+@mcp.tool()
 async def breath(
     query: Optional[str] = "",
     max_tokens: Optional[int] = 0,
@@ -577,10 +581,7 @@ async def breath(
             "importance_min": importance_min, "tags": tags,
         },
     )
-@mcp.tool()
-async def test_weather() -> str:
-    """测试工具"""
-    return "天气工具测试成功"
+
 # ... breath 函数结束 ...
 
 # --- Weather Tool Implementation ---
