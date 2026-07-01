@@ -68,7 +68,6 @@ from tools import anchor as _t_anchor
 from tools import plan as _t_plan
 from tools import dream as _t_dream
 from tools import i as _t_i
-from tools import weather as _t_weather   # 新增这一行
 from tools._common import (
     check_content_size as _check_content_size,
     check_pinned_quota as _check_pinned_quota,
@@ -554,6 +553,50 @@ _tools_runtime.init(
 # 每个入口都不超过 10 行，便于一眼看清参数与归属
 # =============================================================
 @mcp.tool()
+async def ombre_weather(location: str = "上海") -> str:
+    """
+    Ombre Brain 专属天气查询。
+    """
+    import httpx
+    import urllib.parse
+    try:
+        encoded_location = urllib.parse.quote(location)
+        geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={encoded_location}&count=1&language=zh"
+        
+        async with httpx.AsyncClient(verify=False) as client:
+            geo_resp = await client.get(geo_url, timeout=15)
+            geo_data = geo_resp.json()
+        
+        if not geo_data.get("results"):
+            return f"未能找到位置：{location}。"
+        
+        loc_info = geo_data["results"][0]
+        lat = loc_info["latitude"]
+        lon = loc_info["longitude"]
+        name = loc_info.get("name", location)
+        admin1 = loc_info.get("admin1", "")
+        
+        weather_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,cloud_cover,wind_speed_10m,wind_direction_10m,wind_gusts_10m,uv_index&daily=sunrise,sunset&timezone=auto"
+        aqi_url = f"https://air-quality-api.open-meteo.com/v1/air-quality?latitude={lat}&longitude={lon}&current=pm2_5,pm10,us_aqi"
+        
+        async with httpx.AsyncClient(verify=False) as client:
+            w_resp = await client.get(weather_url, timeout=15)
+            a_resp = await client.get(aqi_url, timeout=15)
+            w_data = w_resp.json()
+            a_data = a_resp.json()
+        
+        current_w = w_data.get("current", {})
+        daily_w = w_data.get("daily", {})
+        current_a = a_data.get("current", {})
+        
+        sunrise = daily_w.get("sunrise", ["未知"])[0].split("T")[-1] if daily_w.get("sunrise") else "未知"
+        sunset = daily_w.get("sunset", ["未知"])[0].split("T")[-1] if daily_w.get("sunset") else "未知"
+        
+        report = f"【{name}（{admin1}）】当前天气：\n实时温度 {current_w.get('temperature_2m')}°C | 体感 {current_w.get('apparent_temperature')}°C\n湿度 {current_w.get('relative_humidity_2m')}% | 降水 {current_w.get('precipitation')}mm\nAQI {current_a.get('us_aqi')} | PM2.5 {current_a.get('pm2_5')}\n日出 {sunrise} | 日落 {sunset}"
+        return report
+    except Exception as e:
+        return f"天气查询异常: {e}"
+@mcp.tool()
 async def breath(
     query: Optional[str] = "",
     max_tokens: Optional[int] = 0,
@@ -580,15 +623,7 @@ async def breath(
     )
 
 # ... breath 函数结束 ...
-@mcp.tool()
-async def ombre_weather(location: str = "上海") -> str:
-    """Ombre Brain 专属天气查询"""
-    from tools.weather import ombre_weather as _weather_func
-    return await _with_notice(
-        _weather_func(location=location),
-        op="ombre_weather",
-        args={"location": location},
-    )
+
 # ... 下面继续 hold 函数 ...
 @mcp.tool()
 async def hold(
