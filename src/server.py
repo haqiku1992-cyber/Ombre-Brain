@@ -577,7 +577,10 @@ async def breath(
             "importance_min": importance_min, "tags": tags,
         },
     )
-
+@mcp.tool()
+async def test_weather() -> str:
+    """测试工具"""
+    return "天气工具测试成功"
 # ... breath 函数结束 ...
 
 # --- Weather Tool Implementation ---
