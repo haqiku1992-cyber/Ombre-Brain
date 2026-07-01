@@ -924,7 +924,11 @@ if __name__ == "__main__":
         logger.warning(
             f"FastMCP 内部结构变化，工具回灌失败，仅暴露主集 5 工具：{_merge_exc}"
         )
-
+# === 手动注册 weather（保证被收录）===
+@mcp.tool()
+async def test_weather() -> str:
+    """测试工具"""
+    return "天气工具测试成功"
     if transport in ("sse", "streamable-http"):
         import threading
         import uvicorn
