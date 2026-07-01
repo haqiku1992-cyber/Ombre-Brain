@@ -890,7 +890,7 @@ async def weather(location: str = "上海") -> str:
             f"────────────────────\n"
             f"更新时间：{current_w.get('time', '未知').replace('T', ' ')}"
         )
-        return report
+    return report   # ← 这里要和 try: 对齐（左边没有多余空格）
     except Exception as e:
         return f"获取天气时发生错误：{type(e).__name__} - {str(e)}"
 # --- Entry point / 启动入口 ---
