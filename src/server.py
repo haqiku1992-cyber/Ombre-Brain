@@ -68,6 +68,7 @@ from tools import anchor as _t_anchor
 from tools import plan as _t_plan
 from tools import dream as _t_dream
 from tools import i as _t_i
+from tools import weather as _t_weather   # 新增这一行
 from tools._common import (
     check_content_size as _check_content_size,
     check_pinned_quota as _check_pinned_quota,
@@ -579,7 +580,13 @@ async def breath(
     )
 
 # ... breath 函数结束 ...
-
+@mcp.tool()
+async def weather(location: str = "上海") -> str:
+    return await _with_notice(
+        _t_weather.weather(location=location),
+        op="weather",
+        args={"location": location},
+    )
 # ... 下面继续 hold 函数 ...
 @mcp.tool()
 async def hold(
