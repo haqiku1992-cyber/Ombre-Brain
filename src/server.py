@@ -843,7 +843,7 @@ async def weather(location: str = "上海") -> str:
         
         async with httpx.AsyncClient(verify=False) as client:
             geo_resp = await client.get(geo_url, timeout=15)
-            geo_data = geo_resp.json()  # .json() 是同步的
+            geo_data = geo_resp.json()
         
         if not geo_data.get("results"):
             return f"未能找到位置：{location}，请确认地名是否准确。"
@@ -890,7 +890,6 @@ async def weather(location: str = "上海") -> str:
             f"────────────────────\n"
             f"更新时间：{current_w.get('time', '未知').replace('T', ' ')}"
         )
-        
         return report
     except Exception as e:
         return f"获取天气时发生错误：{type(e).__name__} - {str(e)}"
