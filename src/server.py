@@ -581,13 +581,12 @@ async def breath(
 
 # ... breath 函数结束 ...
 @mcp.tool()
-async def weather(location: str = "上海") -> str:
-    """获取天气"""
-    # 直接从 tools.weather 导入调用
-    from tools.weather import weather as _weather_func
+async def ombre_weather(location: str = "上海") -> str:
+    """Ombre Brain 专属天气查询"""
+    from tools.weather import ombre_weather as _weather_func
     return await _with_notice(
         _weather_func(location=location),
-        op="weather",
+        op="ombre_weather",
         args={"location": location},
     )
 # ... 下面继续 hold 函数 ...
