@@ -553,8 +553,11 @@ _tools_runtime.init(
 # 每个入口都不超过 10 行，便于一眼看清参数与归属
 # =============================================================
 @mcp.tool()
+
 async def test_weather() -> str:
+
     """测试工具"""
+
     return "天气工具测试成功"
 @mcp.tool()
 async def breath(
