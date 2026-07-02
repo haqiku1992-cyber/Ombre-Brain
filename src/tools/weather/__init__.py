@@ -5,7 +5,7 @@ import httpx
 import urllib.parse
 
 # 项目内部依赖（与其他工具保持一致）
-from .. import runtime as rt
+from .. import _runtime as rt
 from .. import _common
 
 async def dispatch(
