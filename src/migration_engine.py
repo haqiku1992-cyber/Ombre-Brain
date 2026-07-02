@@ -55,6 +55,16 @@ TAIL_LOG_LINES = 15
 # 进程级锁：同一时刻只允许一个迁移任务
 _migration_lock = threading.Lock()
 _migration_task: asyncio.Task | None = None
+_v3_runtime: Any = None
+
+
+def attach_v3_runtime(runtime) -> None:
+    global _v3_runtime
+    _v3_runtime = runtime
+
+
+def get_v3_runtime():
+    return _v3_runtime
 
 
 # ============================================================
@@ -391,6 +401,8 @@ __all__ = [
     "start_migration",
     "is_running",
     "reset_for_test",
+    "attach_v3_runtime",
+    "get_v3_runtime",
     "BATCH_SIZE",
     "BATCH_INTERVAL_SEC",
 ]

@@ -38,6 +38,35 @@ except ImportError:  # pragma: no cover
         check_pinned_quota as _check_pinned_quota,
     )
 
+try:
+    from import_memory import preview_import  # type: ignore
+except ImportError:  # pragma: no cover
+    from ..import_memory import preview_import  # type: ignore
+
+
+async def _read_import_upload_text(request: Request) -> tuple[str, str]:
+    content_type = request.headers.get("content-type", "")
+    filename = ""
+    if "multipart/form-data" in content_type:
+        form = await request.form()
+        file_field = form.get("file")
+        if not file_field or isinstance(file_field, str):
+            raise ValueError("No file field")
+        raw_bytes = await file_field.read()
+        filename = getattr(file_field, "filename", "upload")
+        return raw_bytes.decode("utf-8", errors="replace"), filename
+
+    body = await request.body()
+    filename = request.query_params.get("filename", "upload")
+    return body.decode("utf-8", errors="replace"), filename
+
+
+def _import_llm_ready() -> bool:
+    engine_dehydrator = getattr(getattr(sh, "import_engine", None), "dehydrator", None)
+    if engine_dehydrator is not None:
+        return bool(getattr(engine_dehydrator, "api_available", False))
+    return bool(getattr(getattr(sh, "dehydrator", None), "api_available", False))
+
 
 def register(mcp) -> None:
 
@@ -90,6 +119,8 @@ def register(mcp) -> None:
             "ok": True,
             "value": value,
             "env_file": sh._project_env_path(),
+            "restart_required": True,
+            "message": "已保存 OMBRE_HOST_VAULT_DIR；需要重启容器/服务后挂载才会生效。",
             "note": "已写入 .env；需在宿主机执行 `docker compose down && docker compose up -d` 让新挂载生效。",
         })
 
@@ -98,6 +129,36 @@ def register(mcp) -> None:
     # Import API — conversation history import
     # 导入 API — 对话历史导入
     # =============================================================
+
+    @mcp.custom_route("/api/import/preflight", methods=["POST"])
+    async def api_import_preflight(request: Request) -> Response:
+        """Preview an import file without writing buckets or starting a job."""
+        from starlette.responses import JSONResponse
+        err = sh._require_auth(request)
+        if err:
+            return err
+
+        try:
+            raw_content, filename = await _read_import_upload_text(request)
+        except Exception as e:
+            return JSONResponse({"ok": False, "error": f"Failed to read upload: {e}"}, status_code=400)
+
+        if not raw_content.strip():
+            return JSONResponse({"ok": False, "error": "Empty file"}, status_code=400)
+
+        human_label = str((sh.config or {}).get("human") or "用户")
+        preview = preview_import(raw_content, filename=filename, human_label=human_label)
+        import_running = bool(getattr(sh.import_engine, "is_running", False))
+        llm_ready = _import_llm_ready()
+        return JSONResponse({
+            **preview,
+            "filename": filename,
+            "size_bytes": len(raw_content.encode("utf-8")),
+            "import_running": import_running,
+            "llm_ready": llm_ready,
+            "can_start": bool(preview.get("ok")) and not import_running and llm_ready,
+        })
+
 
     @mcp.custom_route("/api/import/upload", methods=["POST"])
     async def api_import_upload(request: Request) -> Response:
@@ -110,23 +171,8 @@ def register(mcp) -> None:
         if sh.import_engine.is_running:
             return JSONResponse({"error": "Import already running"}, status_code=409)
 
-        content_type = request.headers.get("content-type", "")
-        filename = ""
-
         try:
-            if "multipart/form-data" in content_type:
-                form = await request.form()
-                file_field = form.get("file")
-                if not file_field or isinstance(file_field, str):
-                    return JSONResponse({"error": "No file field"}, status_code=400)
-                raw_bytes = await file_field.read()
-                filename = getattr(file_field, "filename", "upload")
-                raw_content = raw_bytes.decode("utf-8", errors="replace")
-            else:
-                body = await request.body()
-                raw_content = body.decode("utf-8", errors="replace")
-                # Try to get filename from query params
-                filename = request.query_params.get("filename", "upload")
+            raw_content, filename = await _read_import_upload_text(request)
 
             if not raw_content.strip():
                 return JSONResponse({"error": "Empty file"}, status_code=400)

@@ -347,6 +347,97 @@ def chunk_turns(turns: list[dict], target_tokens: int = _CHUNK_TARGET_TOKENS, hu
     return chunks
 
 
+def _detect_preview_format(raw_content: str, filename: str, warnings: list[str]) -> str:
+    ext = Path(filename).suffix.lower() if filename else ""
+    stripped = raw_content.strip()
+
+    if ext == ".md":
+        return "markdown"
+    if ext in (".txt", ".jsonl"):
+        return "text"
+
+    if ext == ".json" or stripped.startswith(("{", "[")):
+        try:
+            data = json.loads(stripped)
+            sample = data[0] if isinstance(data, list) and data else data
+            if isinstance(sample, dict):
+                if "chat_messages" in sample:
+                    return "claude_json"
+                if "mapping" in sample:
+                    return "chatgpt_json"
+                if "messages" in sample:
+                    return "chat_json"
+                if "role" in sample and "content" in sample:
+                    return "chat_json"
+            return "json"
+        except (json.JSONDecodeError, TypeError, IndexError):
+            warnings.append("JSON 解析失败，已按纯文本继续预检")
+            return "text"
+
+    return "markdown" if "\n" in raw_content else "text"
+
+
+def preview_import(raw_content: str, filename: str = "", human_label: str = "用户") -> dict[str, Any]:
+    """Return a local-only preview of an import file without mutating state."""
+    warnings: list[str] = []
+    if not raw_content or not raw_content.strip():
+        return {
+            "ok": False,
+            "error": "Empty file",
+            "detected_format": "",
+            "turns_count": 0,
+            "chunks_count": 0,
+            "estimated_api_calls": 0,
+            "warnings": ["文件为空"],
+        }
+
+    detected_format = _detect_preview_format(raw_content, filename, warnings)
+    turns = detect_and_parse(raw_content, filename)
+    if not turns:
+        return {
+            "ok": False,
+            "error": "No conversation turns found",
+            "detected_format": detected_format,
+            "turns_count": 0,
+            "chunks_count": 0,
+            "estimated_api_calls": 0,
+            "warnings": warnings,
+        }
+
+    chunks = chunk_turns(turns, human_label=human_label)
+    if not chunks:
+        return {
+            "ok": False,
+            "error": "No processable chunks after splitting",
+            "detected_format": detected_format,
+            "turns_count": len(turns),
+            "chunks_count": 0,
+            "estimated_api_calls": 0,
+            "warnings": warnings,
+        }
+
+    token_estimate = sum(count_tokens_approx(chunk.get("content", "")) for chunk in chunks)
+    first_preview = chunks[0].get("content", "")[:600]
+    return {
+        "ok": True,
+        "detected_format": detected_format,
+        "turns_count": len(turns),
+        "chunks_count": len(chunks),
+        "estimated_api_calls": len(chunks),
+        "estimated_tokens": token_estimate,
+        "warnings": warnings,
+        "first_chunk_preview": first_preview,
+        "sample_turns": [
+            {
+                "role": str(turn.get("role", "")),
+                "content": str(turn.get("content", ""))[:160],
+                "timestamp": str(turn.get("timestamp", "")),
+            }
+            for turn in turns[:3]
+        ],
+    }
+
+
 # ============================================================
 # Import State — persistent progress tracking
 # 导入状态 — 持久化进度追踪

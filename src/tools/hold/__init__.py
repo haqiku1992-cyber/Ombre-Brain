@@ -52,6 +52,17 @@ async def dispatch(
     why_remembered = str(why_remembered).strip()[:500]
     if rt.mark_op:
         rt.mark_op("hold")
+    rt.record_v3_tool_event("hold", {
+        "content_length": len(content or ""),
+        "tags": tags,
+        "importance": importance,
+        "pinned": pinned,
+        "feel": feel,
+        "source_bucket": source_bucket,
+        "valence": valence,
+        "arousal": arousal,
+        "why_remembered_length": len(why_remembered or ""),
+    })
     await rt.decay_engine.ensure_started()
 
     if not content or not content.strip():

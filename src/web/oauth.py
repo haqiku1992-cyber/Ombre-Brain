@@ -4,8 +4,8 @@ web/oauth.py — MCP 远程鉴权（OAuth 2.1 + PKCE）
 ========================================
 
 MCP 客户端通过 HTTPS 连接 MCP 时走的 OAuth 流程：
-动态注册 → 授权页（输 Dashboard 密码）→ 换 code → 换 Bearer token。
-token 落盘 <buckets_dir>/.dashboard_mcp_tokens.json，100 年有效（实际永久），
+动态注册 → 授权页（输 Dashboard 密码）→ 换 code → 换 Bearer token + refresh token。
+token 落盘 <buckets_dir>/.dashboard_mcp_tokens.json，长期有效并支持刷新，
 Docker 重启不强制重新授权。
 
 server.py 的 MCP 鉴权中间件需要 _is_valid_mcp_token 来校验 /mcp(-extra) 的 Bearer，
@@ -36,9 +36,11 @@ logger = sh.logger
 _oauth_clients: dict[str, dict] = {}
 _oauth_codes: dict[str, dict] = {}    # code -> {client_id, redirect_uri, code_challenge, expires}
 _mcp_tokens: dict[str, float] = {}    # token -> expiry timestamp
+_mcp_refresh_tokens: dict[str, dict] = {}  # refresh_token -> {expires, client_id}
 
 _OAUTH_CODE_TTL = 300               # 5 min
 _MCP_TOKEN_TTL = 86400 * 36500      # 100 年（实际永久）
+_MCP_REFRESH_TOKEN_TTL = 86400 * 36500
 
 
 def _public_base_url(request: Request) -> str:
@@ -53,7 +55,7 @@ def _mcp_tokens_file() -> str:
 
 
 def _load_mcp_tokens() -> None:
-    global _mcp_tokens
+    global _mcp_tokens, _mcp_refresh_tokens
     try:
         path = _mcp_tokens_file()
         if not os.path.exists(path):
@@ -61,8 +63,34 @@ def _load_mcp_tokens() -> None:
         with open(path, "r", encoding="utf-8") as f:
             raw = _json_lib.load(f)
         now = _time_mod.time()
-        _mcp_tokens = {tok: exp for tok, exp in raw.items()
-                       if isinstance(exp, (int, float)) and exp > now}
+        if isinstance(raw, dict) and (
+            "access_tokens" in raw or "refresh_tokens" in raw
+        ):
+            access_raw = raw.get("access_tokens", {})
+            refresh_raw = raw.get("refresh_tokens", {})
+        else:
+            access_raw = raw
+            refresh_raw = {}
+
+        _mcp_tokens = {
+            tok: exp for tok, exp in access_raw.items()
+            if isinstance(exp, (int, float)) and exp > now
+        }
+        _mcp_refresh_tokens = {}
+        for tok, data in refresh_raw.items():
+            if isinstance(data, (int, float)):
+                exp = data
+                client_id = ""
+            elif isinstance(data, dict):
+                exp = data.get("expires")
+                client_id = str(data.get("client_id", ""))
+            else:
+                continue
+            if isinstance(exp, (int, float)) and exp > now:
+                _mcp_refresh_tokens[tok] = {
+                    "expires": exp,
+                    "client_id": client_id,
+                }
     except Exception as e:
         logger.warning(f"[oauth] failed to load mcp tokens: {e}")
 
@@ -73,9 +101,18 @@ def _save_mcp_tokens() -> None:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         now = _time_mod.time()
         active = {tok: exp for tok, exp in _mcp_tokens.items() if exp > now}
+        active_refresh = {
+            tok: data for tok, data in _mcp_refresh_tokens.items()
+            if isinstance(data, dict)
+            and isinstance(data.get("expires"), (int, float))
+            and data["expires"] > now
+        }
         tmp = path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
-            _json_lib.dump(active, f)
+            _json_lib.dump({
+                "access_tokens": active,
+                "refresh_tokens": active_refresh,
+            }, f)
         os.replace(tmp, path)
     except Exception as e:
         logger.warning(f"[oauth] failed to save mcp tokens: {e}")
@@ -95,6 +132,37 @@ def _is_valid_mcp_token(token: str) -> bool:
         del _mcp_tokens[token]
         return False
     return True
+
+
+def _issue_mcp_access_token() -> str:
+    token = secrets.token_urlsafe(32)
+    _mcp_tokens[token] = _time_mod.time() + _MCP_TOKEN_TTL
+    return token
+
+
+def _issue_mcp_refresh_token(client_id: str) -> str:
+    refresh_token = secrets.token_urlsafe(32)
+    _mcp_refresh_tokens[refresh_token] = {
+        "expires": _time_mod.time() + _MCP_REFRESH_TOKEN_TTL,
+        "client_id": client_id,
+    }
+    return refresh_token
+
+
+def _token_response(access_token: str, *, refresh_token: str | None = None) -> dict:
+    payload = {
+        "access_token": access_token,
+        "token_type": "Bearer",
+        "expires_in": _MCP_TOKEN_TTL,
+        "scope": "mcp",
+    }
+    if refresh_token:
+        refresh_data = _mcp_refresh_tokens.get(refresh_token, {})
+        refresh_exp = refresh_data.get("expires")
+        if isinstance(refresh_exp, (int, float)):
+            payload["refresh_expires_in"] = max(0, int(refresh_exp - _time_mod.time()))
+        payload["refresh_token"] = refresh_token
+    return payload
 
 
 def _mcp_auth_check(request: Request):
@@ -158,7 +226,7 @@ button:hover{{background:#d4b87a}}
 <button type="submit">授权并连接</button>
 </form>
 {err_html}
-<p class="note">授权后 {ai_name} 将可使用 MCP 工具读写记忆。<br>Token 永久有效，无需重复授权。<br>若工具调用失败，请在客户端断开重连，再重新点击此页授权即可。</p>
+<p class="note">授权后 {ai_name} 将可使用 MCP 工具读写记忆。<br>Token 长期有效，并支持自动续期。<br>若工具调用失败，请在客户端断开重连，再重新点击此页授权即可。</p>
 </div></body></html>"""
 
 
@@ -191,7 +259,7 @@ def register(mcp) -> None:
             "token_endpoint": f"{base}/oauth/token",
             "registration_endpoint": f"{base}/oauth/register",
             "response_types_supported": ["code"],
-            "grant_types_supported": ["authorization_code"],
+            "grant_types_supported": ["authorization_code", "refresh_token"],
             "code_challenge_methods_supported": ["S256"],
             "token_endpoint_auth_methods_supported": ["none"],
             "scopes_supported": ["mcp"],
@@ -215,7 +283,7 @@ def register(mcp) -> None:
             "redirect_uris": body.get("redirect_uris", []),
             "client_name": body.get("client_name", "MCP Client"),
             "token_endpoint_auth_method": "none",
-            "grant_types": ["authorization_code"],
+            "grant_types": ["authorization_code", "refresh_token"],
             "response_types": ["code"],
         }, status_code=201)
 
@@ -275,8 +343,28 @@ def register(mcp) -> None:
         except Exception:
             return JSONResponse({"error": "invalid_request"}, status_code=400)
 
-        if body.get("grant_type") != "authorization_code":
+        grant_type = body.get("grant_type")
+        if grant_type not in ("authorization_code", "refresh_token"):
             return JSONResponse({"error": "unsupported_grant_type"}, status_code=400)
+
+        if grant_type == "refresh_token":
+            refresh_token = str(body.get("refresh_token", ""))
+            refresh_data = _mcp_refresh_tokens.get(refresh_token)
+            now = _time_mod.time()
+            if not isinstance(refresh_data, dict):
+                return JSONResponse({"error": "invalid_grant", "error_description": "unknown refresh token"}, status_code=400)
+            if refresh_data.get("expires", 0) < now:
+                _mcp_refresh_tokens.pop(refresh_token, None)
+                _save_mcp_tokens()
+                return JSONResponse({"error": "invalid_grant", "error_description": "refresh token expired"}, status_code=400)
+            client_id = str(body.get("client_id", ""))
+            stored_client_id = str(refresh_data.get("client_id", ""))
+            if client_id and stored_client_id and client_id != stored_client_id:
+                return JSONResponse({"error": "invalid_grant", "error_description": "client_id mismatch"}, status_code=400)
+
+            token = _issue_mcp_access_token()
+            _save_mcp_tokens()
+            return JSONResponse(_token_response(token, refresh_token=refresh_token))
 
         code = str(body.get("code", ""))
         code_verifier = str(body.get("code_verifier", ""))
@@ -290,12 +378,7 @@ def register(mcp) -> None:
             if not code_verifier or not _verify_pkce(code_verifier, code_data["code_challenge"]):
                 return JSONResponse({"error": "invalid_grant", "error_description": "PKCE verification failed"}, status_code=400)
 
-        token = secrets.token_urlsafe(32)
-        _mcp_tokens[token] = _time_mod.time() + _MCP_TOKEN_TTL
+        token = _issue_mcp_access_token()
+        refresh_token = _issue_mcp_refresh_token(str(code_data.get("client_id", "")))
         _save_mcp_tokens()
-        return JSONResponse({
-            "access_token": token,
-            "token_type": "Bearer",
-            "expires_in": _MCP_TOKEN_TTL,
-            "scope": "mcp",
-        })
+        return JSONResponse(_token_response(token, refresh_token=refresh_token))

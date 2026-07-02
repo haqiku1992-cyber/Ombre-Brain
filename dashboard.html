@@ -1946,6 +1946,20 @@
       </div>
     </div>
 
+    <div id="import-preflight-panel" style="display:none;margin:14px 0;padding:12px 14px;background:var(--surface-solid);border-radius:8px;font-size:12px;line-height:1.7;box-shadow:inset 2px 2px 5px var(--shadow-dark-subtle),inset -2px -2px 4px var(--shadow-light);">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
+        <strong style="font-size:13px;">导入预检</strong>
+        <span id="import-preflight-file" style="color:var(--text-light);word-break:break-all;"></span>
+      </div>
+      <div id="import-preflight-summary" style="color:var(--text-dim);">等待文件…</div>
+      <div id="import-preflight-warnings" style="display:none;color:var(--warning);margin-top:6px;"></div>
+      <pre id="import-preflight-preview" style="display:none;margin-top:8px;padding:10px;background:var(--surface);border-radius:6px;max-height:160px;overflow:auto;white-space:pre-wrap;word-break:break-word;font-size:11px;color:var(--text-dim);font-family:'Share Tech Mono','SF Mono',Consolas,monospace;"></pre>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px;">
+        <button id="import-start-confirm-btn" onclick="confirmStartImport()" style="display:inline-flex;align-items:center;gap:5px;padding:0 12px;height:32px;"><i data-lucide="play"></i> 开始导入</button>
+        <button onclick="clearImportPreflight()" style="display:inline-flex;align-items:center;gap:5px;padding:0 12px;height:32px;"><i data-lucide="x"></i> 取消</button>
+      </div>
+    </div>
+
     <div id="import-progress" style="display:none;margin:20px 0;">
       <div style="display:flex;justify-content:space-between;margin-bottom:8px;">
         <span id="import-status-text">准备中…</span>
@@ -2356,6 +2370,19 @@
         <div style="font-weight:600;font-size:13px;margin-bottom:6px;">服务状态</div>
         <div id="settings-status" style="font-size:13px;color:var(--text-dim);line-height:2;">加载中…</div>
         <button onclick="loadSettingsStatus()" title="刷新" style="margin-top:8px;font-size:12px;padding:0 12px;height:32px;display:inline-flex;align-items:center;gap:5px;"><i data-lucide="refresh-cw"></i> 刷新</button>
+      </div>
+
+      <div style="margin-bottom:18px;">
+        <div style="font-weight:600;font-size:13px;margin-bottom:6px;">系统体检</div>
+        <div style="font-size:12px;color:var(--text-dim);margin-bottom:8px;line-height:1.6;">
+          快速检查本地配置、数据目录、向量化、GitHub 备份和访问控制，不会主动请求外部 API。
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">
+          <button onclick="loadSystemDiagnostics()" title="运行体检" style="font-size:12px;padding:0 12px;height:32px;display:inline-flex;align-items:center;gap:5px;"><i data-lucide="activity"></i> 一键体检</button>
+          <span id="system-diagnostics-summary" style="font-size:12px;color:var(--text-dim);">尚未运行</span>
+          <span id="system-diagnostics-updated" style="font-size:11px;color:var(--text-light);"></span>
+        </div>
+        <div id="system-diagnostics-list" style="display:flex;flex-direction:column;gap:8px;"></div>
       </div>
 
       <div style="margin-bottom:18px;">
@@ -3422,6 +3449,67 @@ async function loadSettingsStatus() {
   await loadTunnelStatus();
 }
 
+function diagnosticStatusLabel(status) {
+  if (status === 'ok') return '正常';
+  if (status === 'warning') return '提醒';
+  if (status === 'error') return '需处理';
+  return status || '未知';
+}
+
+function diagnosticStatusColor(status) {
+  if (status === 'ok') return 'var(--positive,#87A987)';
+  if (status === 'warning') return 'var(--warning,#B89762)';
+  if (status === 'error') return 'var(--negative,#BE5A41)';
+  return 'var(--text-dim)';
+}
+
+function renderDiagnosticCheck(check) {
+  const color = diagnosticStatusColor(check.status);
+  const details = check.details || {};
+  const detailText = Object.keys(details).map(function (key) {
+    const val = details[key];
+    if (val === null || val === undefined || val === '') return '';
+    return '<span><b>' + esc(key) + '</b>: ' + esc(String(val)) + '</span>';
+  }).filter(Boolean).join(' · ');
+  return '<div style="border-left:3px solid ' + color + ';padding:9px 11px;background:var(--surface-solid);border-radius:8px;font-size:12px;line-height:1.6;box-shadow:inset 1px 1px 3px var(--shadow-dark-subtle),inset -1px -1px 3px var(--shadow-light);">'
+    + '<div style="display:flex;align-items:center;gap:8px;justify-content:space-between;flex-wrap:wrap;">'
+    + '<strong style="font-size:13px;color:var(--text);">' + esc(check.label || check.id || '检查项') + '</strong>'
+    + '<span style="color:' + color + ';font-weight:600;">' + diagnosticStatusLabel(check.status) + '</span>'
+    + '</div>'
+    + '<div style="color:var(--text-dim);margin-top:3px;">' + esc(check.message || '') + '</div>'
+    + (check.action ? '<div style="color:var(--accent);margin-top:3px;">建议：' + esc(check.action) + '</div>' : '')
+    + (detailText ? '<div style="color:var(--text-light);margin-top:4px;word-break:break-all;">' + detailText + '</div>' : '')
+    + '</div>';
+}
+
+async function loadSystemDiagnostics() {
+  const summaryEl = document.getElementById('system-diagnostics-summary');
+  const listEl = document.getElementById('system-diagnostics-list');
+  const updatedEl = document.getElementById('system-diagnostics-updated');
+  if (!summaryEl || !listEl) return;
+  summaryEl.style.color = 'var(--text-dim)';
+  summaryEl.textContent = '体检中…';
+  listEl.innerHTML = '';
+  try {
+    const resp = await authFetch('/api/system/diagnostics');
+    if (!resp) return;
+    const d = await readJsonSafe(resp);
+    const s = d.summary || {};
+    const checks = d.checks || [];
+    const ok = d.ok !== false;
+    summaryEl.style.color = ok ? 'var(--positive,#87A987)' : 'var(--negative,#BE5A41)';
+    summaryEl.innerHTML = (ok ? _SV.ok + ' ' : _SV.warn + ' ')
+      + '正常 ' + (s.ok || 0) + ' · 提醒 ' + (s.warning || 0) + ' · 需处理 ' + (s.error || 0);
+    listEl.innerHTML = checks.length
+      ? checks.map(renderDiagnosticCheck).join('')
+      : '<div style="font-size:12px;color:var(--text-dim);">没有返回体检项。</div>';
+    if (updatedEl) updatedEl.textContent = '刚刚刷新 ' + new Date().toLocaleTimeString();
+  } catch(e) {
+    summaryEl.style.color = 'var(--negative)';
+    summaryEl.textContent = '体检失败：' + (e && e.message ? e.message : e);
+  }
+}
+
 // 修复钉选计数：先 GET 预演拿孤儿数 → 确认 → POST 实际降级。
 async function fixPinnedDesync() {
   const msgEl = document.getElementById('fix-pinned-msg');
@@ -3742,7 +3830,7 @@ async function saveHostVault() {
     const d = await resp.json();
     if (resp.ok) {
       msg.style.color = 'var(--accent)';
-      msg.textContent = '已保存 → ' + (d.env_file || '.env') + '（需重启容器生效）';
+      msg.textContent = d.message || ('已保存 → ' + (d.env_file || '.env') + '（需重启容器生效）');
     } else {
       msg.style.color = 'var(--negative)';
       msg.textContent = d.error || '保存失败';
@@ -3819,6 +3907,7 @@ document.querySelectorAll('.tab').forEach(tab => {
     if (target === 'settings') {
       // 任务D：合并 config + settings 后，切换到「设置」时一次性加载所有面板数据
       loadSettingsStatus();
+      loadSystemDiagnostics();
       loadHumanName();
       loadConfig();
       refreshEnvConfig();
@@ -4050,7 +4139,7 @@ async function showDetail(id) {
         '<button onclick="bucketResolve(\'' + id + '\')" class="icon-btn">' + (meta.resolved ? '<i data-lucide="rotate-ccw"></i> 取消已解决' : '<i data-lucide="check"></i> 标记已解决') + '</button>' +
         '<button onclick="bucketForget(\'' + id + '\')" class="icon-btn">' + (meta.dont_surface ? '<i data-lucide="eye"></i> 重新允许浮现' : '<i data-lucide="moon-off"></i> 主动遗忘') + '</button>' +
         '<button onclick="bucketArchive(\'' + id + '\')" class="icon-btn"><i data-lucide="archive"></i> 归档</button>' +
-        '<button onclick="bucketDelete(\'' + id + '\')" class="icon-btn" style="color:#b85c3c;"><i data-lucide="trash-2"></i> 彻底删除</button>' +
+        '<button onclick="bucketDelete(\'' + id + '\')" class="icon-btn" style="color:#b85c3c;"><i data-lucide="trash-2"></i> 删除到档案</button>' +
       '</div>' +
       '<div class="detail-content">' + esc(b.content) + '</div>' +
       renderEditForm(id, Object.assign({}, meta, {_content_for_edit: b.content}));
@@ -4143,6 +4232,8 @@ async function bucketResolve(id) {
   try {
     var res = await fetch(BASE + '/api/bucket/' + id + '/resolve', { method: 'POST' });
     if (!res.ok) throw new Error(await res.text());
+    var d = await res.json();
+    if (d.message) alert(d.message);
     await showDetail(id);
     loadBuckets();
   } catch (e) { alert('resolve 切换失败: ' + e.message); }
@@ -4159,8 +4250,8 @@ async function bucketArchive(id) {
 }
 
 async function bucketDelete(id) {
-  if (!confirm('这将彻底删除此记忆桶，文件不可恢复。确认删除？')) return;
-  if (!confirm('再次确认：你真的要永久删除吗？')) return;
+  if (!confirm('这会把此记忆桶移入删除档案，并从日常界面隐藏；文件仍保留在 archive/ 中。继续？')) return;
+  if (!confirm('再次确认：这不是物理抹除。彻底删除请使用清理模式。')) return;
   try {
     var res = await fetch(BASE + '/api/bucket/' + id + '?confirm=true', { method: 'DELETE' });
     if (!res.ok) throw new Error(await res.text());
@@ -6619,6 +6710,7 @@ window.addEventListener('load', function() {
 // --- Import functions ---
 const uploadZone = document.getElementById('import-upload-zone');
 const fileInput = document.getElementById('import-file-input');
+let pendingImportFile = null;
 
 uploadZone.addEventListener('click', () => fileInput.click());
 uploadZone.addEventListener('dragover', e => { e.preventDefault(); uploadZone.style.borderColor = 'var(--accent)'; });
@@ -6626,9 +6718,83 @@ uploadZone.addEventListener('dragleave', () => { uploadZone.style.borderColor = 
 uploadZone.addEventListener('drop', e => {
   e.preventDefault();
   uploadZone.style.borderColor = 'var(--border)';
-  if (e.dataTransfer.files.length) startImport(e.dataTransfer.files[0]);
+  if (e.dataTransfer.files.length) runImportPreflight(e.dataTransfer.files[0]);
 });
-fileInput.addEventListener('change', () => { if (fileInput.files.length) startImport(fileInput.files[0]); });
+fileInput.addEventListener('change', () => { if (fileInput.files.length) runImportPreflight(fileInput.files[0]); });
+
+function renderImportPreflight(data) {
+  const panel = document.getElementById('import-preflight-panel');
+  const fileEl = document.getElementById('import-preflight-file');
+  const summary = document.getElementById('import-preflight-summary');
+  const warn = document.getElementById('import-preflight-warnings');
+  const preview = document.getElementById('import-preflight-preview');
+  const btn = document.getElementById('import-start-confirm-btn');
+  if (!panel || !summary || !btn) return;
+  panel.style.display = '';
+  if (fileEl) fileEl.textContent = data.filename || (pendingImportFile ? pendingImportFile.name : '');
+  if (!data.ok) {
+    summary.style.color = 'var(--negative)';
+    summary.textContent = '预检失败：' + (data.error || '无法识别文件');
+    btn.disabled = true;
+    if (warn) warn.style.display = 'none';
+    if (preview) preview.style.display = 'none';
+    return;
+  }
+  summary.style.color = data.can_start ? 'var(--text-dim)' : 'var(--warning)';
+  summary.innerHTML =
+    '格式：<b>' + esc(data.detected_format || 'unknown') + '</b>'
+    + ' · 轮次：<b>' + (data.turns_count || 0) + '</b>'
+    + ' · 分块：<b>' + (data.chunks_count || 0) + '</b>'
+    + ' · 预计 API 调用：<b>' + (data.estimated_api_calls || 0) + '</b>'
+    + ' · 大小：<b>' + Math.round((data.size_bytes || 0) / 1024) + ' KB</b>'
+    + (!data.llm_ready ? '<br><span style="color:var(--negative)">压缩/打标 LLM 未就绪，暂不能导入。</span>' : '')
+    + (data.import_running ? '<br><span style="color:var(--negative)">已有导入任务运行中，请完成后再开始。</span>' : '');
+  const warnings = data.warnings || [];
+  if (warn) {
+    warn.style.display = warnings.length ? '' : 'none';
+    warn.innerHTML = warnings.map(function(w) { return '⚠ ' + esc(w); }).join('<br>');
+  }
+  if (preview) {
+    preview.style.display = data.first_chunk_preview ? '' : 'none';
+    preview.textContent = data.first_chunk_preview || '';
+  }
+  btn.disabled = !data.can_start;
+}
+
+async function runImportPreflight(file) {
+  pendingImportFile = file;
+  const panel = document.getElementById('import-preflight-panel');
+  const summary = document.getElementById('import-preflight-summary');
+  const btn = document.getElementById('import-start-confirm-btn');
+  if (panel) panel.style.display = '';
+  if (summary) { summary.style.color = 'var(--text-dim)'; summary.textContent = '预检中…'; }
+  if (btn) btn.disabled = true;
+  const fd = new FormData();
+  fd.append('file', file);
+  try {
+    const res = await fetch(BASE + '/api/import/preflight', { method: 'POST', body: fd });
+    const data = await res.json();
+    renderImportPreflight(data);
+  } catch (e) {
+    renderImportPreflight({ ok: false, error: e.message || String(e), filename: file.name });
+  }
+}
+
+function clearImportPreflight() {
+  pendingImportFile = null;
+  if (fileInput) fileInput.value = '';
+  const panel = document.getElementById('import-preflight-panel');
+  if (panel) panel.style.display = 'none';
+}
+
+async function confirmStartImport() {
+  if (!pendingImportFile) return;
+  const file = pendingImportFile;
+  pendingImportFile = null;
+  const btn = document.getElementById('import-start-confirm-btn');
+  if (btn) btn.disabled = true;
+  await startImport(file);
+}
 
 async function startImport(file) {
   const preserveRaw = document.getElementById('import-preserve-raw').checked;
@@ -6638,6 +6804,7 @@ async function startImport(file) {
     const res = await fetch(BASE + '/api/import/upload?preserve_raw=' + (preserveRaw ? '1' : '0'), { method: 'POST', body: fd });
     const data = await res.json();
     if (data.error) { alert('导入失败: ' + data.error); return; }
+    clearImportPreflight();
     document.getElementById('import-progress').style.display = '';
     document.getElementById('import-pause-btn').style.display = '';
     pollImportStatus();
@@ -6713,7 +6880,7 @@ async function loadImportResults() {
           <button onclick="reviewAction('${b.id}','pin')" class="icon-btn" title="固定为永久记忆"><i data-lucide="pin"></i> 固定</button>
           <button onclick="reviewAction('${b.id}','important')" class="icon-btn" title="标为重要"><i data-lucide="star"></i> 重要</button>
           <button onclick="reviewAction('${b.id}','noise')" class="icon-btn" title="标为噪声并resolve"><i data-lucide="trash-2"></i> 噪声</button>
-          <button onclick="if(confirm('确定删除？'))reviewAction('${b.id}','delete')" class="icon-btn" title="彻底删除" style="color:var(--negative);"><i data-lucide="x"></i> 删除</button>
+          <button onclick="if(confirm('确定移入删除档案？'))reviewAction('${b.id}','delete')" class="icon-btn" title="删除到档案" style="color:var(--negative);"><i data-lucide="x"></i> 删除到档案</button>
         </div>
       </div>
     `).join('');
@@ -7641,12 +7808,12 @@ async function editLetter(id) {
 }
 
 async function deleteLetter(id) {
-  if (!confirm('这将彻底删除这封信，文件不可恢复。确认删除？')) return;
-  if (!confirm('再次确认：你真的要永久删除这封信吗？')) return;
+  if (!confirm('这会把这封信移入删除档案；文件仍保留在 archive/ 中。继续？')) return;
+  if (!confirm('再次确认：这不是物理抹除。')) return;
   try {
     const r = await fetch(BASE + '/api/letter/' + encodeURIComponent(id) + '?confirm=true', { method: 'DELETE' });
     const d = await r.json();
-    if (d.ok) { alert('已删除'); loadLetters(); }
+    if (d.ok) { alert('已删除到档案'); loadLetters(); }
     else { alert(d.error || '删除失败'); }
   } catch (e) { alert(e.message); }
 }

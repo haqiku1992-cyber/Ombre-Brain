@@ -6,7 +6,7 @@
 
 A long-term emotional memory system for Claude (and any MCP client). Tags memories using Russell's valence/arousal coordinates, stores them as Obsidian-compatible Markdown, connects via MCP, with forgetting curve and vector semantic search.
 
-> **v2.4.1 noncommercial notice**: v2.4.1 architecture work is intended as source-available public code for personal, learning, research, and noncommercial self-hosting use. Commercial hosting, resale, renamed resale, SaaS resale, or selling modified v2.4.0 builds requires project-owner permission. See [LICENSE.v2.4.0-NONCOMMERCIAL-NOTICE.md](LICENSE.v2.4.0-NONCOMMERCIAL-NOTICE.md).
+> **v2.4.0 noncommercial notice**: v2.4.0 architecture work is intended as source-available public code for personal, learning, research, and noncommercial self-hosting use. Commercial hosting, resale, renamed resale, SaaS resale, or selling modified v2.4.0 builds requires project-owner permission. See [LICENSE.v2.4.0-NONCOMMERCIAL-NOTICE.md](LICENSE.v2.4.0-NONCOMMERCIAL-NOTICE.md).
 
 > **开发者文档**：架构 / API / 配置细节请见 [docs/INTERNALS.md](docs/INTERNALS.md)。本 README 只关心『怎么把它跑起来用上』。
 >
@@ -269,8 +269,8 @@ Claude.ai                    Ombre Brain 服务器
    │── POST /oauth/authorize ─────>│ 302 (验证通过，生成授权码)
    │<─ redirect_uri?code=xxx ──────│
    │                               │
-   │── POST /oauth/token ─────────>│ 200 (交换 Bearer Token)
-   │<─ {access_token: "..."} ──────│
+   │── POST /oauth/token ─────────>│ 200 (交换 Bearer + refresh token)
+   │<─ {access_token, refresh_token} ─│
    │                               │
    │── POST /mcp (Bearer token) ──>│ 200 (MCP 会话建立)
    │<─ tools: [breath, hold...] ───│
@@ -279,7 +279,7 @@ Claude.ai                    Ombre Brain 服务器
 **注意事项**：
 - 弹出的授权页是你自己的 Ombre Brain 服务器，不是第三方
 - 密码就是你的 Dashboard 密码
-- Token 有效期 30 天，过期后会自动重新授权
+- Access token 长期有效，并支持 refresh token 自动续期；headless 环境不需要因 token 过期重新打开浏览器
 - 同一账号第一次授权后，之后的连接自动使用存储的 token
 
 #### 步骤 3：连接端点
@@ -554,7 +554,7 @@ docker compose -f deploy/docker-compose.yml up -d
 | 工具调用显示「执行报错」但记忆其实写进去了 | **不是服务器问题**：服务端已成功返回，是 Claude.ai 连接器/渲染层把一次成功往返显示成了报错 | 用 `letter_read` 或 Dashboard 确认数据已落盘；服务端日志 `phase=ok` 即表示成功 |
 | 向量化不生效 / 语义检索没结果（压缩却正常） | base_url 漏 `/v1`（→404）、model 漏 `BAAI/` 前缀（→Model does not exist），或在 Dashboard 改了 key 没重建引擎 | 用 Dashboard 向量化区的「测试」按钮自查；按上面「用硅基流动…」一节填对 base_url 与 model；错误详情见设置页错误面板（OB-E001） |
 | 自有前端 / GPT / GLM 调用 MCP 工具被 401 卡住 | 默认强制 OAuth，自定义客户端不走该流程 | 设 `OMBRE_MCP_REQUIRE_AUTH=false`（或 `config.yaml: mcp_require_auth: false`）后重启；详见「方式三：接入自有前端」 |
-| Token 过期后无法自动重连 | Bearer token 默认 30 天有效 | 在 Claude.ai connector 设置里重新授权 |
+| Token 过期后无法自动重连 | 旧版本不支持 `refresh_token` grant，headless 环境只能重新打开授权页 | 更新到 v2.4.11+ 后重新授权一次，之后客户端可用 refresh token 自动续期 |
 | Dashboard 401 | 未登录 / 密码错 | 浏览器重新登录 |
 | `hold` / `grow` 报 API key 错误 | LLM key 未配置 | Dashboard → ③ 引擎 填入 Key 点「保存 Key」，立即热更新 |
 | 重启后记忆丢失 | Volume 没挂载 | 检查 docker-compose volume 配置 |

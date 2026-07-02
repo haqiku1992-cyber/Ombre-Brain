@@ -37,6 +37,9 @@ import logging
 from starlette.requests import Request
 from starlette.responses import Response
 
+from ombrebrain.app.execution import ExecutionEnvelope
+from ombrebrain.policy.update_policy import evaluate_update_manifest as _evaluate_update_manifest
+
 logger = logging.getLogger("ombre_brain")
 
 # --- 运行环境探测（Docker vs 裸机）---
@@ -80,6 +83,7 @@ embedding_engine = None
 import_engine = None
 migrate_engine = None
 github_sync_instance = None
+v3_runtime = None
 
 
 def init(cfg: dict) -> None:
@@ -95,6 +99,54 @@ def init_runtime(**kwargs) -> None:
     只更新传入的键，未传的保持不变。
     """
     globals().update(kwargs)
+
+
+def evaluate_v3_update_manifest(manifest, content_by_path):
+    """Evaluate hot-update manifests through v3 policy when available."""
+    runtime = globals().get("v3_runtime")
+    evaluator = getattr(runtime, "evaluate_update_manifest", None)
+    if callable(evaluator):
+        try:
+            return evaluator(manifest, content_by_path)
+        except Exception as exc:
+            logger.warning(f"v3 update manifest evaluation failed, falling back: {exc}")
+    return _evaluate_update_manifest(manifest, content_by_path)
+
+
+def run_v3_web_operation(
+    operation: str,
+    payload: dict | None,
+    handler,
+    *,
+    module: str,
+    permissions: tuple[str, ...] = (),
+    required_permissions: tuple[str, ...] = (),
+    actor_name: str = "dashboard",
+    source: str = "web",
+    capability: str = "",
+    writes_memory: bool = False,
+    protected_paths: tuple[str, ...] = (),
+    feature_flags: tuple[str, ...] = (),
+):
+    """Run a web operation through the optional v3 execution side channel."""
+    runtime = globals().get("v3_runtime")
+    runner = getattr(runtime, "run_operation", None)
+    if not callable(runner):
+        return handler()
+    envelope = ExecutionEnvelope(
+        module=module,
+        operation=operation,
+        payload=payload or {},
+        actor_name=actor_name,
+        source=source,
+        permissions=permissions,
+        required_permissions=required_permissions,
+        capability=capability,
+        writes_memory=writes_memory,
+        protected_paths=protected_paths,
+        feature_flags=feature_flags,
+    )
+    return runner(envelope, handler)
 
 
 # --- 心跳 / 活跃时间戳（原 server.py；移到这里让 heartbeat 路由与工具共用同一来源）---

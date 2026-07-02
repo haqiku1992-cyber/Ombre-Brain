@@ -56,6 +56,16 @@ async def dispatch(
 
     if rt.mark_op:
         rt.mark_op("breath")
+    rt.record_v3_tool_event("breath", {
+        "query": query,
+        "max_tokens": max_tokens,
+        "domain": domain,
+        "valence": valence,
+        "arousal": arousal,
+        "max_results": max_results,
+        "importance_min": importance_min,
+        "tags": tags,
+    })
     await rt.decay_engine.ensure_started()
 
     surfacing_cfg = rt.config.get("surfacing", {}) or {}

@@ -153,10 +153,11 @@ class BucketManager:
     天然兼容 Obsidian 直接浏览和编辑。
     """
 
-    def __init__(self, config: dict, embedding_engine=None):
+    def __init__(self, config: dict, embedding_engine=None, v3_runtime=None):
         # iter 1.9 G: 保留原始 config 引用，让 create() 能读 bucket_type_defaults
         # Keep raw config so create() can look up bucket_type_defaults at write time.
         self.config = config
+        self.v3_runtime = v3_runtime
         # --- Read storage paths from config / 从配置中读取存储路径 ---
         self.base_dir = config["buckets_dir"]
         self.permanent_dir = os.path.join(self.base_dir, "permanent")
@@ -209,6 +210,32 @@ class BucketManager:
         # BM25 稀疏索引（写操作后脏标记，search() 时懒重建）
         self._bm25: "_BM25Index | None" = _BM25Index() if _BM25Index is not None else None
         self._bm25_dirty: bool = True
+
+    def attach_v3_runtime(self, runtime) -> None:
+        self.v3_runtime = runtime
+
+    def _record_v3_bucket_event(
+        self,
+        action: str,
+        bucket_id: str,
+        bucket_type: str,
+        content: str,
+        metadata: dict | None,
+    ) -> None:
+        runtime = getattr(self, "v3_runtime", None)
+        recorder = getattr(runtime, "record_bucket_event", None)
+        if not callable(recorder):
+            return
+        try:
+            recorder(
+                action=action,
+                bucket_id=bucket_id,
+                bucket_type=bucket_type,
+                content=content,
+                metadata=metadata or {},
+            )
+        except Exception as exc:
+            logger.warning(f"v3 bucket event record failed for {action}:{bucket_id}: {exc}")
 
     # ---------------------------------------------------------
     # Internal helpers【代码多复用、不作为公共 API】
@@ -500,6 +527,13 @@ class BucketManager:
                 pass
             raise
         self._invalidate_bm25()
+        self._record_v3_bucket_event(
+            "create",
+            bucket_id,
+            str(metadata.get("type") or bucket_type),
+            linked_content,
+            metadata,
+        )
 
         return bucket_id
 
@@ -705,6 +739,13 @@ class BucketManager:
         if "content" in kwargs:
             await self._sync_embedding(bucket_id, post.content or "")
         self._invalidate_bm25()
+        self._record_v3_bucket_event(
+            "update",
+            bucket_id,
+            str(post.get("type") or "dynamic"),
+            post.content or "",
+            dict(post.metadata),
+        )
 
         return True
 
@@ -762,6 +803,13 @@ class BucketManager:
 
         self._invalidate_bm25()
         logger.info(f"Soft-deleted bucket (moved to archive) / 软删除记忆桶: {bucket_id}")
+        self._record_v3_bucket_event(
+            "delete",
+            bucket_id,
+            str(post.get("type") or "dynamic"),
+            post.content or "",
+            dict(post.metadata),
+        )
         return True
 
     # ---------------------------------------------------------
@@ -1235,6 +1283,13 @@ class BucketManager:
 
         self._invalidate_bm25()
         logger.info(f"Archived bucket / 归档记忆桶: {bucket_id} → archive/{primary_domain}/")
+        self._record_v3_bucket_event(
+            "archive",
+            bucket_id,
+            str(post.get("type") or "archived"),
+            post.content or "",
+            dict(post.metadata),
+        )
         return True
 
     # ---------------------------------------------------------

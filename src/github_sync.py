@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
+import json
 import logging
 import os
 from datetime import datetime, timezone
@@ -27,6 +29,7 @@ _API = "https://api.github.com"
 _TIMEOUT = 60.0
 _MAX_FILE_BYTES = 5 * 1024 * 1024  # GitHub single blob 上限 ~100MB，这里保守限 5MB
 _TREE_CHUNK = 200                  # 每个 /git/trees 请求最多内联多少文件，避免单请求过大
+_MANIFEST_FILENAME = "_ombre_backup_manifest.json"
 
 
 class GitHubSync:
@@ -94,6 +97,13 @@ class GitHubSync:
             async with httpx.AsyncClient(headers=self._headers, timeout=_TIMEOUT) as c:
                 # 取 branch HEAD → commit tree → 递归列出全部 blob
                 r = await self._request(c, "GET", f"{_API}/repos/{self.repo}/git/ref/heads/{self.branch}")
+                if _is_empty_repo_response(r):
+                    return {
+                        "ok": True,
+                        "imported": 0,
+                        "skipped": 0,
+                        "message": f"GitHub 仓库 {self.repo} 还是空仓库，暂无可导入的记忆文件",
+                    }
                 if r.status_code == 404:
                     return {"ok": False, "error": f"分支 {self.branch} 不存在"}
                 r.raise_for_status()
@@ -108,6 +118,15 @@ class GitHubSync:
                 truncated = bool(tj.get("truncated"))
 
                 prefix = (self.path_prefix + "/") if self.path_prefix else ""
+                manifest_path = f"{prefix}{_MANIFEST_FILENAME}"
+                manifest_item = next(
+                    (
+                        t for t in tree
+                        if t.get("type") == "blob" and t.get("path") == manifest_path
+                    ),
+                    None,
+                )
+                backup_manifest = await self._read_backup_manifest_summary(c, manifest_item) if manifest_item else {"present": False}
                 targets = [
                     t for t in tree
                     if t.get("type") == "blob" and t.get("path", "").startswith(prefix)
@@ -115,7 +134,8 @@ class GitHubSync:
                 ]
                 if not targets:
                     return {"ok": True, "imported": 0, "skipped": 0,
-                            "message": f"GitHub 仓库 {self.repo} 的 {prefix or '/'} 下没有 .md 记忆文件"}
+                            "message": f"GitHub 仓库 {self.repo} 的 {prefix or '/'} 下没有 .md 记忆文件",
+                            "backup_manifest": backup_manifest}
 
                 base = os.path.abspath(buckets_dir)
                 imported = 0
@@ -156,6 +176,7 @@ class GitHubSync:
                     "total": len(targets),
                     "truncated": truncated,
                     "errors": errors[:10],
+                    "backup_manifest": backup_manifest,
                 }
         except Exception as e:
             logger.error(f"[github_sync] import failed: {e}")
@@ -232,6 +253,30 @@ class GitHubSync:
                     logger.warning(f"[github_sync] skip {fn}: {e}")
         return result
 
+    def _build_backup_manifest(self, files: dict[str, bytes]) -> dict[str, Any]:
+        """Build a JSON-safe manifest for the markdown files in one sync."""
+        entries = []
+        total_bytes = 0
+        for rel_path, content in sorted(files.items()):
+            size = len(content)
+            total_bytes += size
+            entries.append({
+                "path": rel_path,
+                "bytes": size,
+                "sha256": hashlib.sha256(content).hexdigest(),
+            })
+        return {
+            "schema_version": 1,
+            "source": "ombre-brain",
+            "generated_at": _now_iso(),
+            "repo": self.repo,
+            "branch": self.branch,
+            "path_prefix": self.path_prefix,
+            "file_count": len(entries),
+            "total_bytes": total_bytes,
+            "files": entries,
+        }
+
     async def _batch_commit(self, files: dict[str, bytes]) -> int:
         """用 Git Trees API 一次性提交所有文件，返回上传文件数。
 
@@ -244,17 +289,21 @@ class GitHubSync:
         最后只打一个 commit。所有请求都带指数退避重试以应对偶发的二级限流。
         """
         async with httpx.AsyncClient(headers=self._headers, timeout=_TIMEOUT) as c:
-            # 1. 获取 branch HEAD commit SHA
+            # 1. 获取 branch HEAD commit SHA。GitHub 空仓库没有任何 ref，会在这里返回 409。
             r = await self._request(c, "GET", f"{_API}/repos/{self.repo}/git/ref/heads/{self.branch}")
+            bootstrap_branch = _is_empty_repo_response(r)
+            head_sha: str | None = None
+            base_tree_sha: str | None = None
             if r.status_code == 404:
                 raise RuntimeError(f"分支 {self.branch} 不存在，请先在 GitHub 上创建该分支")
-            r.raise_for_status()
-            head_sha: str = r.json()["object"]["sha"]
+            if not bootstrap_branch:
+                r.raise_for_status()
+                head_sha = r.json()["object"]["sha"]
 
-            # 2. 获取 HEAD commit 对应的 tree SHA
-            r = await self._request(c, "GET", f"{_API}/repos/{self.repo}/git/commits/{head_sha}")
-            r.raise_for_status()
-            base_tree_sha: str = r.json()["tree"]["sha"]
+                # 2. 获取 HEAD commit 对应的 tree SHA
+                r = await self._request(c, "GET", f"{_API}/repos/{self.repo}/git/commits/{head_sha}")
+                r.raise_for_status()
+                base_tree_sha = r.json()["tree"]["sha"]
 
             # 3. 组装 tree entries（内联 content，文本直接走 UTF-8）
             entries: list[dict] = []
@@ -273,13 +322,25 @@ class GitHubSync:
                     entry = {"path": gh_path, "mode": "100644", "type": "blob", "sha": rb.json()["sha"]}
                 entries.append(entry)
 
+            manifest_path = f"{self.path_prefix}/{_MANIFEST_FILENAME}" if self.path_prefix else _MANIFEST_FILENAME
+            manifest = self._build_backup_manifest(files)
+            entries.append({
+                "path": manifest_path,
+                "mode": "100644",
+                "type": "blob",
+                "content": json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True),
+            })
+
             # 4. 分块创建 tree，块间用 base_tree 串联
             cur_base = base_tree_sha
             for i in range(0, len(entries), _TREE_CHUNK):
                 chunk = entries[i:i + _TREE_CHUNK]
+                tree_payload: dict[str, Any] = {"tree": chunk}
+                if cur_base:
+                    tree_payload["base_tree"] = cur_base
                 r = await self._request(
                     c, "POST", f"{_API}/repos/{self.repo}/git/trees",
-                    json={"base_tree": cur_base, "tree": chunk},
+                    json=tree_payload,
                 )
                 r.raise_for_status()
                 cur_base = r.json()["sha"]
@@ -292,20 +353,53 @@ class GitHubSync:
                 json={
                     "message": f"Ombre Brain sync — {now_str} ({len(files)} files)",
                     "tree": new_tree_sha,
-                    "parents": [head_sha],
+                    "parents": [head_sha] if head_sha else [],
                 },
             )
             r.raise_for_status()
             commit_sha: str = r.json()["sha"]
 
-            # 6. 更新 branch ref
-            r = await self._request(
-                c, "PATCH", f"{_API}/repos/{self.repo}/git/refs/heads/{self.branch}",
-                json={"sha": commit_sha, "force": False},
-            )
+            # 6. 更新已有 branch ref；空仓库首次提交则创建 branch ref
+            if bootstrap_branch:
+                r = await self._request(
+                    c, "POST", f"{_API}/repos/{self.repo}/git/refs",
+                    json={"ref": f"refs/heads/{self.branch}", "sha": commit_sha},
+                )
+            else:
+                r = await self._request(
+                    c, "PATCH", f"{_API}/repos/{self.repo}/git/refs/heads/{self.branch}",
+                    json={"sha": commit_sha, "force": False},
+                )
             r.raise_for_status()
 
         return len(files)
+
+    async def _read_backup_manifest_summary(
+        self,
+        client: httpx.AsyncClient,
+        manifest_item: dict[str, Any],
+    ) -> dict[str, Any]:
+        try:
+            sha = manifest_item.get("sha", "")
+            if not sha:
+                return {"present": False}
+            rb = await self._request(client, "GET", f"{_API}/repos/{self.repo}/git/blobs/{sha}")
+            rb.raise_for_status()
+            bj = rb.json()
+            if bj.get("encoding") == "base64":
+                raw = base64.b64decode(bj.get("content", "")).decode("utf-8", errors="replace")
+            else:
+                raw = str(bj.get("content", "") or "")
+            data = json.loads(raw)
+            return {
+                "present": True,
+                "schema_version": data.get("schema_version"),
+                "generated_at": data.get("generated_at", ""),
+                "file_count": int(data.get("file_count") or 0),
+                "total_bytes": int(data.get("total_bytes") or 0),
+            }
+        except Exception as e:
+            return {"present": False, "error": str(e)[:200]}
 
     async def _request(
         self,
@@ -346,3 +440,14 @@ class GitHubSync:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _is_empty_repo_response(resp: httpx.Response) -> bool:
+    """GitHub returns 409 when refs are requested from a zero-commit repo."""
+    if resp.status_code != 409:
+        return False
+    try:
+        message = str(resp.json().get("message", ""))
+    except Exception:
+        message = resp.text
+    return "empty" in message.lower()
