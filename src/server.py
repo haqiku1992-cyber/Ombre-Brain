@@ -621,6 +621,8 @@ async def ombre_speak(text: str) -> str:
 
     except Exception as e:
         return f"调用语音服务失败：{type(e).__name__} - {str(e)}"
+logger.info(f"SPEAK_DEBUG tools now: {list(mcp._tool_manager._tools.keys())}")
+logger.info(f"SPEAK_DEBUG has ombre_speak: {'ombre_speak' in mcp._tool_manager._tools}")
 @mcp.tool()
 async def breath(
     query: Optional[str] = "",
