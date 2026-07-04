@@ -598,7 +598,7 @@ async def ombre_weather(location: str = "上海") -> str:
         return report
     except Exception as e:
         return f"天气查询异常: {e}"
-      @mcp.tool()
+@mcp.tool()
 async def speak(text: str) -> str:
     """
     手动将重要文本转换为 Claude 语音。只有用户明确要求朗读/发声时才使用。
