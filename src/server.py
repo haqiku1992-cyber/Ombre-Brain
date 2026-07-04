@@ -726,6 +726,31 @@ async def release(bucket_id: str) -> str:
 
 
 @mcp_extra.tool()
+async def speak(text: str) -> str:
+    """
+    手动将重要文本转换为 Claude 语音。只有用户明确要求朗读/发声时才使用。
+    """
+    if not text or not text.strip():
+        return "请提供要朗读的文本。"
+
+    import httpx
+
+    voice_url = "https://voice-service-xxxxx.zeabur.app/generate-voice"
+
+    try:
+        async with httpx.AsyncClient(timeout=60.0, verify=False) as client:
+            response = await client.post(voice_url, json={"text": text})
+
+        if response.status_code == 200:
+            return f"语音已生成。音频大小：{len(response.content)} bytes。"
+
+        return f"语音生成失败：{response.status_code} {response.text}"
+
+    except Exception as e:
+        return f"调用语音服务失败：{type(e).__name__} - {str(e)}"
+
+
+@mcp_extra.tool()
 async def pulse(include_archive: Optional[bool] = False) -> str:
     """返回记忆系统状态摘要:固化/动态/归档/feel/plan/letter 数量、总占用、衰减引擎运行状态,以及所有桶的摘要列表。include_archive=True 同时返回归档区。"""
     return await _with_notice(
