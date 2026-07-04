@@ -608,7 +608,7 @@ async def speak(text: str) -> str:
 
     import httpx
 
-    voice_url = "https://voice-service-xxxxx.zeabur.app/"
+    voice_url = "https://voice-service-xxxxx.zeabur.app/generate-voice"
 
     try:
         async with httpx.AsyncClient(timeout=60.0, verify=False) as client:
