@@ -598,7 +598,6 @@ async def ombre_weather(location: str = "上海") -> str:
         return report
     except Exception as e:
         return f"天气查询异常: {e}"
-
 @mcp.tool()
 async def breath(
     query: Optional[str] = "",
