@@ -1,17 +1,19 @@
+# src/tools/speak/__init__.py
+
 from typing import Optional
 
 import httpx
 
 from .. import _runtime as rt
 
-VOICE_SERVICE_URL = "https://voice-service-xxxxx.zeabur.app/generate-voice"
+VOICE_SERVICE_URL = "https://voice-service-xxxxx.zeabur.app/"
 
 
 async def dispatch(
     text: str,
     max_tokens: Optional[int] = 0,
     max_results: Optional[int] = 0,
-    **kwargs,
+    **kwargs
 ) -> str:
     if not text:
         return "请提供要朗读的文本。"
