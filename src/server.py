@@ -69,7 +69,6 @@ from tools import plan as _t_plan
 from tools import dream as _t_dream
 from tools import i as _t_i
 from tools import weather as _t_weather
-from tools import speak as _t_speak
 from tools._common import (
     check_content_size as _check_content_size,
     check_pinned_quota as _check_pinned_quota,
