@@ -169,11 +169,9 @@ async def trace_core(
     if not success:
         return f"修改失败: {bucket_id}"
 
-    if "content" in updates:
-        try:
-            await rt.embedding_engine.generate_and_store(bucket_id, updates["content"])
-        except Exception:
-            pass
+    # 注意：bucket_mgr.update() 在 "content" in kwargs 时已经内部调用
+    # _sync_embedding() 重新生成并写入向量（见 bucket_manager.py），这里不需要
+    # 也不应该重复调用 generate_and_store，否则同一条内容会多打一次向量 API。
 
     # --- plan 桶人工/AI 显式 resolve → 联动 related_bucket / resolved_by ---
     # rule.md §1：plan 是承诺，承诺被显式放下，承载它的事件桶也不该再浮上来。

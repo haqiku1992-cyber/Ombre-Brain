@@ -2,6 +2,29 @@
 
 本项目版本号见根目录 `VERSION` 文件，Docker 镜像 tag 与之对应（`p0luz/ombre-brain:<VERSION>`）。
 
+## 2.4.13
+
+### 修复 / Fixed
+
+- 修复向量 API 被反复重复调用的问题：`trace(content=...)` / `plan()` / `letter_write()` 在
+  `bucket_mgr.update()` / `create()` 已经内部同步生成并存好向量之后，又各自显式调用了一次
+  `embedding_engine.generate_and_store()`，导致每次写操作都对同一段内容打两次向量 API。
+  现在移除了这些多余的显式调用。
+- `EmbeddingEngine` 新增进程内小容量 LRU 查询缓存：`breath(query=...)` 内部会对同一个查询串
+  各自调用一次向量检索（`bucket_mgr.search()` 内部一次、`surface_search()` 直接又一次），
+  `hold()`/`grow()` 的 `merge_or_create` → `check_duplicate_for` → `check_plan_resolution`
+  三条 fire-and-forget 链路也会对同一段新内容各嵌入一次。同一段文本对同一模型的向量结果恒定，
+  缓存后这些短时间内的重复请求不再重新打向量 API。
+
+### 测试 / Tests
+
+- 现有 `tests/test_embedding_api_regression.py` 等回归测试全部通过，确认门面缓存不影响
+  既有向量化行为。
+
+### 维护 / Chores
+
+- VERSION + `src/VERSION` -> 2.4.13。
+
 ## 2.4.12
 
 ### 优化 / Improved

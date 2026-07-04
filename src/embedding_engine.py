@@ -39,6 +39,7 @@ import logging
 import math
 import os
 import sqlite3
+from collections import OrderedDict
 from typing import Any
 
 import httpx
@@ -72,6 +73,13 @@ _API_TIMEOUT_SECONDS = 30.0
 
 # 输入截断长度
 _MAX_INPUT_CHARS = 2000
+
+# 同一段文本短时间内被多条链路重复请求向量（同一个 breath(query=...) 里
+# bucket_mgr.search() 和 surface_search() 各查一次；同一个 hold() 里
+# merge_or_create/check_duplicate_for/check_plan_resolution 各嵌入一次同样的
+# content）。同一 (text, model) 恒定映射到同一向量，缓存最近 N 条查询结果即可
+# 把这些重复请求拦在进程内，不用每次都打真实向量 API。
+_QUERY_CACHE_MAXSIZE = 32
 
 
 def _norm_model(name: str) -> str:
@@ -320,6 +328,8 @@ class EmbeddingEngine:
 
     def __init__(self, config: dict):
         self.v3_runtime = None
+        # 进程内小容量 LRU：text -> embedding，去重短时间内的重复向量请求。
+        self._query_cache: "OrderedDict[str, list[float]]" = OrderedDict()
         embed_cfg = config.get("embedding", {}) or {}
         timeout_seconds = positive_float(embed_cfg.get("timeout_seconds"), _API_TIMEOUT_SECONDS)
 
@@ -555,7 +565,17 @@ class EmbeddingEngine:
     async def _generate_async(self, text: str) -> list[float]:
         if not self._backend:
             return []
-        return await self._backend.generate_async(text)
+        cached = self._query_cache.get(text)
+        if cached is not None:
+            self._query_cache.move_to_end(text)
+            return list(cached)
+        embedding = await self._backend.generate_async(text)
+        if embedding:
+            self._query_cache[text] = list(embedding)
+            self._query_cache.move_to_end(text)
+            if len(self._query_cache) > _QUERY_CACHE_MAXSIZE:
+                self._query_cache.popitem(last=False)
+        return embedding
 
     async def generate_and_store(self, bucket_id: str, content: str) -> bool:
         """为内容生成 embedding 并存入 SQLite。成功返回 True。"""
