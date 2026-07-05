@@ -738,7 +738,7 @@ async def release(bucket_id: str) -> str:
     )
 
 
-@mcp_extra.tool()
+@mcp.tool()
 async def speak(text: str) -> str:
     """
     手动将重要文本转换为 Claude 语音。只有用户明确要求朗读/发声时才使用。
