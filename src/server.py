@@ -738,64 +738,52 @@ async def release(bucket_id: str) -> str:
     )
 
 
-@mcp.tool()
+@mcp_extra.tool()
 async def speak(text: str) -> str:
     """
     手动将重要文本转换为 Claude 语音。只有用户明确要求朗读/发声时才使用。
     """
-    # 参数验证
     if not text or not text.strip():
         return "请提供要朗读的文本。"
 
-    # 检查 voice 服务 URL 是否配置
-    if not VOICE_SERVICE_URL or "xxxxx" in VOICE_SERVICE_URL:
-        return (
-            "❌ 语音服务未配置。请设置环境变量 VOICE_SERVICE_URL "
-            "为你的语音服务地址（例如：https://your-voice-service.zeabur.app/generate-voice）"
-        )
-
+    import io
+    import os
+    import uuid
     import httpx
+    from minio import Minio
 
-    try:
-        # 构建请求头
-        headers = {}
-        if VOICE_API_KEY:
-            headers["Authorization"] = f"Bearer {VOICE_API_KEY}"
+    voice_url = os.getenv("VOICE_SERVICE_URL")
 
-        # 调用语音服务
-        async with httpx.AsyncClient(timeout=VOICE_TIMEOUT, verify=False) as client:
-            response = await client.post(
-                VOICE_SERVICE_URL,
-                json={"text": text},
-                headers=headers,
-            )
+    async with httpx.AsyncClient(timeout=60.0, verify=False) as client:
+        response = await client.post(voice_url, json={"text": text})
 
-        # 处理响应
-        if response.status_code == 200:
-            audio_size = len(response.content)
-            return f"✅ 语音已生成。音频大小：{audio_size} bytes。"
+    if response.status_code != 200:
+        return f"语音生成失败：{response.status_code} {response.text}"
 
-        elif response.status_code == 401:
-            return "❌ 语音服务认证失败。请检查 VOICE_API_KEY 是否正确。"
+    endpoint = os.getenv("S3_ENDPOINT", "").replace("http://", "").replace("https://", "")
+    bucket = os.getenv("S3_BUCKET", "zeabur")
+    public_endpoint = os.getenv("S3_PUBLIC_ENDPOINT", "").rstrip("/")
 
-        elif response.status_code == 400:
-            return f"❌ 请求参数错误：{response.text}"
+    minio_client = Minio(
+        endpoint,
+        access_key=os.getenv("S3_ACCESS_KEY"),
+        secret_key=os.getenv("S3_SECRET_KEY"),
+        secure=False,
+    )
 
-        elif response.status_code == 503:
-            return "❌ 语音服务暂时不可用，请稍后重试。"
+    object_name = f"voice/{uuid.uuid4().hex}.mp3"
+    audio = response.content
 
-        else:
-            return f"❌ 语音生成失败（HTTP {response.status_code}）：{response.text}"
+    minio_client.put_object(
+        bucket,
+        object_name,
+        io.BytesIO(audio),
+        length=len(audio),
+        content_type="audio/mpeg",
+    )
 
-    except httpx.TimeoutException:
-        return f"❌ 语音服务请求超时（{VOICE_TIMEOUT}秒）。请检查网络连接或增加超时时间。"
-
-    except httpx.ConnectError as e:
-        return f"❌ 无法连接到语音服务：{VOICE_SERVICE_URL}。请检查 URL 是否正确。"
-
-    except Exception as e:
-        logger.error(f"speak() 异常：{type(e).__name__} - {str(e)}")
-        return f"❌ 调用语音服务失败：{type(e).__name__} - {str(e)}"
+    url = f"{public_endpoint}/{bucket}/{object_name}"
+    return f"语音已生成：{url}"
 
 
 @mcp_extra.tool()
