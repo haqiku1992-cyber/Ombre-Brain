@@ -789,7 +789,11 @@ async def speak(text: str) -> str:
         # 备用方案：如果没有配置 PUBLIC_ENDPOINT，使用内部端点
         url = f"http://{endpoint}:9000/{bucket}/{object_name}"
     
-    return f"🎵 语音已生成，可点击播放：{url}"
+    return {
+        "type": "audio",
+        "url": url,
+        "message": "🎵 语音已生成，可点击播放"
+    }
 @mcp_extra.tool()
 async def pulse(include_archive: Optional[bool] = False) -> str:
     """返回记忆系统状态摘要:固化/动态/归档/feel/plan/letter 数量、总占用、衰减引擎运行状态,以及所有桶的摘要列表。include_archive=True 同时返回归档区。"""
