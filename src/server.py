@@ -747,20 +747,49 @@ async def speak(text: str) -> str:
         return "请提供要朗读的文本。"
 
     import io
+    import json
     import os
     import uuid
     import httpx
     from minio import Minio
+    from minio.error import S3Error
 
     voice_url = os.getenv("VOICE_SERVICE_URL")
+    if not voice_url:
+        return json.dumps({"error": "VOICE_SERVICE_URL 未配置"}, ensure_ascii=False)
 
-    async with httpx.AsyncClient(timeout=60.0, verify=False) as client:
-        response = await client.post(voice_url, json={"text": text})
+    # 1. 调用语音服务生成音频
+    try:
+        async with httpx.AsyncClient(timeout=60.0, verify=False) as client:
+            response = await client.post(voice_url, json={"text": text})
+    except Exception as e:
+        return json.dumps({"error": f"语音服务请求失败: {e}"}, ensure_ascii=False)
 
     if response.status_code != 200:
-        return f"语音生成失败：{response.status_code} {response.text}"
+        return json.dumps({
+            "error": f"语音生成失败: {response.status_code}",
+            "detail": response.text[:200]
+        }, ensure_ascii=False)
 
-    endpoint = os.getenv("S3_ENDPOINT", "").replace("http://", "").replace("https://", "")
+    audio = response.content
+    if not audio or len(audio) < 100:
+        return json.dumps({
+            "error": "语音服务返回空或无效音频",
+            "content_length": len(audio) if audio else 0
+        }, ensure_ascii=False)
+
+    # 2. 生成唯一 object key
+    filename = f"{uuid.uuid4().hex}.mp3"
+    object_key = f"audio/{filename}"
+
+    # 3. 配置 MinIO 连接
+    raw_endpoint = os.getenv("S3_ENDPOINT", "")
+    if not raw_endpoint:
+        return json.dumps({"error": "S3_ENDPOINT 未配置"}, ensure_ascii=False)
+
+    secure = raw_endpoint.startswith("https://")
+    endpoint = raw_endpoint.replace("http://", "").replace("https://", "").rstrip("/")
+
     bucket = os.getenv("S3_BUCKET", "zeabur")
     public_endpoint = os.getenv("S3_PUBLIC_ENDPOINT", "").rstrip("/")
 
@@ -768,30 +797,57 @@ async def speak(text: str) -> str:
         endpoint,
         access_key=os.getenv("S3_ACCESS_KEY"),
         secret_key=os.getenv("S3_SECRET_KEY"),
-        secure=False,
+        secure=secure,
     )
 
-    object_name = f"audio/{uuid.uuid4().hex}.mp3"
-    audio = response.content
+    # 4. 上传到 MinIO
+    try:
+        minio_client.put_object(
+            bucket,
+            object_key,
+            io.BytesIO(audio),
+            length=len(audio),
+            content_type="audio/mpeg",
+        )
+    except S3Error as e:
+        return json.dumps({
+            "error": f"MinIO 上传失败: {e.code}",
+            "detail": str(e),
+            "object_key": object_key
+        }, ensure_ascii=False)
 
-    minio_client.put_object(
-        bucket,
-        object_name,
-        io.BytesIO(audio),
-        length=len(audio),
-        content_type="audio/mpeg",
-    )
+    # 5. 验证对象确实存在
+    try:
+        stat = minio_client.stat_object(bucket, object_key)
+        if stat.size != len(audio):
+            return json.dumps({
+                "error": "上传验证失败: 文件大小不匹配",
+                "expected": len(audio),
+                "actual": stat.size,
+                "object_key": object_key
+            }, ensure_ascii=False)
+    except S3Error as e:
+        return json.dumps({
+            "error": f"上传验证失败: 对象不存在",
+            "detail": str(e),
+            "object_key": object_key
+        }, ensure_ascii=False)
 
-    # 构建可访问的 URL
+    # 6. 构建公开 URL（使用同一个 object_key）
     if public_endpoint:
-        public_url = f"{public_endpoint}/{bucket}/{object_name}"
+        public_url = f"{public_endpoint}/{bucket}/{object_key}"
     else:
-        # 备用方案：如果没有配置 PUBLIC_ENDPOINT，使用内部端点
-        public_url = f"http://{endpoint}:9000/{bucket}/{object_name}"
-    
-    return public_url
+        public_url = f"http://{endpoint}/{bucket}/{object_key}"
 
-
+    return json.dumps({
+        "status": "success",
+        "audio_url": public_url,
+        "object_key": object_key,
+        "filename": filename,
+        "size": len(audio),
+        "verified": True,
+        "message": "Audio generated successfully. Use audio_url exactly as provided; do not modify any characters."
+    }, ensure_ascii=False)
 async def pulse(include_archive: Optional[bool] = False) -> str:
     """返回记忆系统状态摘要:固化/动态/归档/feel/plan/letter 数量、总占用、衰减引擎运行状态,以及所有桶的摘要列表。include_archive=True 同时返回归档区。"""
     return await _with_notice(
