@@ -18,7 +18,7 @@ import os
 import random
 
 from starlette.requests import Request
-from starlette.responses import Response
+from starlette.responses import JSONResponse, Response
 
 from . import _shared as sh
 
@@ -28,6 +28,11 @@ try:
     from utils import strip_wikilinks, count_tokens_approx, get_ai_name  # type: ignore
 except ImportError:  # pragma: no cover
     from ..utils import strip_wikilinks, count_tokens_approx, get_ai_name  # type: ignore
+
+try:
+    from tools import hold as _t_hold  # type: ignore
+except ImportError:  # pragma: no cover
+    from ..tools import hold as _t_hold  # type: ignore
 
 
 def _truthy(value) -> bool:
@@ -82,6 +87,30 @@ def _is_hook_request_authorized(request) -> bool:
 
 
 def register(mcp) -> None:
+
+    @mcp.custom_route("/memory-hook", methods=["POST"])
+    async def memory_hook(request):
+        """Token-protected write bridge for private frontends such as Chiaros."""
+        if not _is_hook_request_authorized(request):
+            return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"ok": False, "error": "invalid JSON"}, status_code=400)
+        content = str(body.get("content") or "").strip()[:12000]
+        if not content:
+            return JSONResponse({"ok": False, "error": "content required"}, status_code=400)
+        try:
+            result = await _t_hold.dispatch(
+                content=content,
+                tags=str(body.get("tags") or "chiaros,chat")[:300],
+                importance=int(body.get("importance") or 5),
+                source_bucket=str(body.get("source_bucket") or "chiaros")[:120],
+            )
+            return JSONResponse({"ok": True, "result": result})
+        except Exception as exc:
+            logger.exception("memory_hook write failed")
+            return JSONResponse({"ok": False, "error": type(exc).__name__}, status_code=500)
 
     @mcp.custom_route("/breath-hook", methods=["GET"])
     async def breath_hook(request):
