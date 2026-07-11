@@ -26,6 +26,17 @@ from embedding_engine import EmbeddingEngine
 from utils import load_config
 
 
+def _find_any_bucket_file(buckets: BucketManager, bucket_id: str) -> str | None:
+    """Find an exact ID across normal, feel, plan, letter, and archive directories."""
+    for _root, _name, path in buckets._iter_md_files(list(buckets._active_dirs) + [buckets.archive_dir]):
+        try:
+            if frontmatter.load(path).get("id") == bucket_id:
+                return path
+        except Exception:
+            continue
+    return None
+
+
 async def main(ids: list[str], apply: bool) -> int:
     config = load_config()
     embedding = EmbeddingEngine(config)
@@ -33,7 +44,7 @@ async def main(ids: list[str], apply: bool) -> int:
     targets = []
 
     for bucket_id in ids:
-        path = buckets._find_bucket_file(bucket_id)
+        path = _find_any_bucket_file(buckets, bucket_id)
         if not path:
             print(f"NOT FOUND: {bucket_id}")
             continue
