@@ -25,6 +25,7 @@ import urllib.parse as _urlparse
 import base64 as _base64
 import hashlib as _hashlib_oauth
 import html as _html_escape
+import hmac as _hmac
 
 from starlette.requests import Request
 from starlette.responses import Response
@@ -125,6 +126,11 @@ def _verify_pkce(code_verifier: str, code_challenge: str) -> bool:
 
 
 def _is_valid_mcp_token(token: str) -> bool:
+    # A server-only token lets an internal relay call MCP without weakening the
+    # public OAuth requirement. Keep it out of browser/client-side code.
+    service_token = os.environ.get("OMBRE_MCP_SERVICE_TOKEN", "").strip()
+    if service_token and _hmac.compare_digest(token, service_token):
+        return True
     expiry = _mcp_tokens.get(token)
     if expiry is None:
         return False
