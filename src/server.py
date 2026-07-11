@@ -848,6 +848,9 @@ async def speak(text: str) -> str:
         "verified": True,
         "message": "Audio generated successfully. Use audio_url exactly as provided; do not modify any characters."
     }, ensure_ascii=False)
+
+
+@mcp_extra.tool()
 async def pulse(include_archive: Optional[bool] = False) -> str:
     """返回记忆系统状态摘要:固化/动态/归档/feel/plan/letter 数量、总占用、衰减引擎运行状态,以及所有桶的摘要列表。include_archive=True 同时返回归档区。"""
     return await _with_notice(
