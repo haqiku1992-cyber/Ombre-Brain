@@ -30,7 +30,10 @@ def _find_any_bucket_file(buckets: BucketManager, bucket_id: str) -> str | None:
     """Find an exact ID across normal, feel, plan, letter, and archive directories."""
     for _root, _name, path in buckets._iter_md_files(list(buckets._active_dirs) + [buckets.archive_dir]):
         try:
-            if frontmatter.load(path).get("id") == bucket_id:
+            post = frontmatter.load(path)
+            # Some legacy plan/letter files derive their ID from the filename
+            # instead of storing it in frontmatter.
+            if post.get("id") == bucket_id or bucket_id in os.path.basename(path):
                 return path
         except Exception:
             continue
