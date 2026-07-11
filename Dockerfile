@@ -41,6 +41,11 @@ COPY config.example.yaml ./config.default.yaml
 COPY entrypoint.sh ./entrypoint.sh
 RUN chmod +x ./entrypoint.sh
 
+# Used by entrypoint.sh to distinguish a newly built image from a same-image restart.
+# This keeps dashboard hot updates, while reliably applying source changes on redeploy.
+RUN (find ./src ./frontend -type f -print0 | sort -z | xargs -0 sha256sum; sha256sum ./VERSION) \
+    | sha256sum | awk '{print $1}' > .image_code_hash
+
 # Persistent mount point: bucket data
 # 持久化挂载点：记忆数据
 VOLUME ["/app/buckets"]
