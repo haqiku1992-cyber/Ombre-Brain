@@ -3950,7 +3950,7 @@ function doSearch() {
 
 async function loadBuckets() {
   try {
-    const res = await fetch(BASE + '/api/buckets');
+    const res = await fetch(BASE + '/api/buckets' + (_purgeMode ? '?include_deleted=1' : ''));
     const data = await res.json();
     if (!res.ok || !Array.isArray(data)) {
       throw new Error((data && data.error) ? data.error : `HTTP ${res.status}`);
