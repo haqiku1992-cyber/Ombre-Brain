@@ -113,9 +113,10 @@ def register(mcp) -> None:
         try:
             all_buckets = await sh.bucket_mgr.list_all(include_archive=True)
             result = []
+            include_deleted = request.query_params.get("include_deleted", "").lower() in ("1", "true", "yes")
             for b in all_buckets:
                 meta = b.get("metadata", {})
-                if meta.get("deleted_at"):
+                if meta.get("deleted_at") and not include_deleted:
                     continue
                 result.append({
                     "id": b["id"],
@@ -141,6 +142,7 @@ def register(mcp) -> None:
                     "first_of_kind": bool(meta.get("first_of_kind", False)),
                     "weight": meta.get("weight"),  # plan 专有，非 plan 为 None
                     "triggered_by": meta.get("triggered_by", ""),
+                    "deleted_at": meta.get("deleted_at", ""),
                 })
             result.sort(key=lambda x: x["score"], reverse=True)
             return JSONResponse(result)
