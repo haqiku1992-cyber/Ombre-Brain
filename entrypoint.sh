@@ -88,6 +88,11 @@ _bootstrap_code() {
 
     IMG_VER="$(cat "$IMAGE_ROOT/VERSION" 2>/dev/null || echo unknown)"
     SEEDED_VER="$(cat "$CODE_DIR/.seeded_image_version" 2>/dev/null || echo none)"
+    # VERSION is user-managed and may not change on every source build. The image
+    # fingerprint makes new builds refresh the volume code, while a restart of the
+    # same image still preserves dashboard hot updates in CODE_DIR.
+    IMG_HASH="$(cat "$IMAGE_ROOT/.image_code_hash" 2>/dev/null || echo unknown)"
+    SEEDED_HASH="$(cat "$CODE_DIR/.seeded_image_hash" 2>/dev/null || echo none)"
 
     # --- ② 崩溃自愈：上一次启动没被 server.py 标记成功 → 计数累加；超阈值且有 _prev 则回滚 ---
     FAILS="$(cat "$CODE_DIR/.boot_fails" 2>/dev/null || echo 0)"
@@ -103,8 +108,8 @@ _bootstrap_code() {
         echo 0 > "$CODE_DIR/.boot_fails" 2>/dev/null || true
     fi
 
-    # --- ① 播种 / 重建覆盖：首次，或镜像版本变了(正经重建) ---
-    if [ ! -f "$CODE_DIR/src/server.py" ] || [ "$IMG_VER" != "$SEEDED_VER" ]; then
+    # --- ① 播种 / 重建覆盖：首次，或镜像源码 / 版本变了 ---
+    if [ ! -f "$CODE_DIR/src/server.py" ] || [ "$IMG_VER" != "$SEEDED_VER" ] || [ "$IMG_HASH" != "$SEEDED_HASH" ]; then
         echo "[entrypoint] 播种代码到持久卷 $CODE_DIR (image=v$IMG_VER, 卷上 seeded=$SEEDED_VER)"
         rm -rf "$CODE_DIR/src" "$CODE_DIR/frontend" 2>/dev/null
         cp -a "$IMAGE_ROOT/src" "$CODE_DIR/src" 2>/dev/null || return 1
@@ -112,6 +117,7 @@ _bootstrap_code() {
         cp -a "$IMAGE_ROOT/VERSION" "$CODE_DIR/VERSION" 2>/dev/null || true
         rm -rf "$CODE_DIR/_prev" 2>/dev/null
         echo "$IMG_VER" > "$CODE_DIR/.seeded_image_version" 2>/dev/null || true
+        echo "$IMG_HASH" > "$CODE_DIR/.seeded_image_hash" 2>/dev/null || true
         FAILS=0
     fi
 
