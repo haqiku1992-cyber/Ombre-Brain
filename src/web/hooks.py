@@ -13,9 +13,12 @@ web/hooks.py — breath / dream 浮现挂载点（HTTP hook）
 ========================================
 """
 
+import base64
 import hmac
+import json
 import os
 import random
+import zlib
 
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
@@ -23,6 +26,17 @@ from starlette.responses import JSONResponse, Response
 from . import _shared as sh
 
 logger = sh.logger
+
+BREATH_PROVENANCE_HEADER = "X-Ombre-Breath-Provenance"
+_BREATH_PROVENANCE_MAX_HEADER_CHARS = 3900
+_BREATH_PROVENANCE_MAX_SOURCES = 48
+_BREATH_PROVENANCE_SECTION_CODES = {
+    "pinned": "p",
+    "unresolved": "u",
+    "letter:user": "lu",
+    "letter:ai": "la",
+    "i/self": "i",
+}
 
 try:
     from utils import strip_wikilinks, count_tokens_approx, get_ai_name  # type: ignore
@@ -86,6 +100,65 @@ def _is_hook_request_authorized(request) -> bool:
         return False
 
 
+def _utf8_prefix(value, max_bytes: int) -> str:
+    return str(value or "").encode("utf-8")[:max_bytes].decode("utf-8", "ignore")
+
+
+def _breath_source_row(bucket: dict, section: str) -> list:
+    meta = bucket.get("metadata") if isinstance(bucket.get("metadata"), dict) else {}
+    return [
+        _BREATH_PROVENANCE_SECTION_CODES[section],
+        _utf8_prefix(bucket.get("id") or meta.get("id"), 96),
+        _utf8_prefix(meta.get("name") or meta.get("title"), 80),
+        1,
+    ]
+
+
+def _record_breath_source(provenance: dict, bucket: dict, section: str) -> None:
+    """Best-effort observability; never affect breath rendering."""
+
+    try:
+        sources = provenance["sources"]
+        if len(sources) >= _BREATH_PROVENANCE_MAX_SOURCES:
+            provenance["truncated"] = True
+            return
+        row = _breath_source_row(bucket, section)
+        if row[1]:
+            sources.append(row)
+    except Exception as exc:
+        logger.warning(f"breath provenance source failed: {exc}")
+
+
+def _encode_breath_provenance(provenance: dict) -> str:
+    """Return one bounded ASCII header containing only safe source metadata."""
+
+    sources = list(provenance.get("sources") or [])[:_BREATH_PROVENANCE_MAX_SOURCES]
+    if not sources:
+        return ""
+
+    def encode(rows: list, truncated: bool) -> str:
+        raw = json.dumps(
+            {"v": 1, "s": rows, "t": bool(truncated)},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        packed = base64.urlsafe_b64encode(zlib.compress(raw, 9)).decode("ascii").rstrip("=")
+        return "z1." + packed
+
+    truncated = bool(provenance.get("truncated"))
+    value = encode(sources, truncated)
+    if len(value) <= _BREATH_PROVENANCE_MAX_HEADER_CHARS:
+        return value
+
+    # Display names are optional; retain every source id/kind before dropping rows.
+    sources = [[row[0], row[1], "", row[3]] for row in sources]
+    value = encode(sources, truncated)
+    while sources and len(value) > _BREATH_PROVENANCE_MAX_HEADER_CHARS:
+        sources.pop()
+        value = encode(sources, True)
+    return value if sources else ""
+
+
 def register(mcp) -> None:
 
     @mcp.custom_route("/memory-hook", methods=["POST"])
@@ -119,6 +192,7 @@ def register(mcp) -> None:
             return PlainTextResponse("", status_code=401)
         try:
             all_buckets = await sh.bucket_mgr.list_all(include_archive=False)
+            provenance = {"sources": [], "truncated": False}
             # pinned
             pinned = [b for b in all_buckets if b["metadata"].get("pinned") or b["metadata"].get("protected")]
             # top 2 unresolved by score
@@ -135,6 +209,7 @@ def register(mcp) -> None:
             for b in pinned:
                 summary = await sh.dehydrator.dehydrate(strip_wikilinks(b["content"]), {k: v for k, v in b["metadata"].items() if k != "tags"})
                 parts.append(f"📌 [核心准则] {summary}")
+                _record_breath_source(provenance, b, "pinned")
                 token_budget -= count_tokens_approx(summary)
 
             # Diversity: top-1 fixed + shuffle rest from top-20
@@ -155,6 +230,7 @@ def register(mcp) -> None:
                 if summary_tokens > token_budget:
                     break
                 parts.append(summary)
+                _record_breath_source(provenance, b, "unresolved")
                 token_budget -= summary_tokens
 
             if not parts:
@@ -178,7 +254,11 @@ def register(mcp) -> None:
                     # AI 侧：新署名 ai_name + 历史遗留的 "claude"
                     latest_ai = _latest(get_ai_name(), "claude")
                     letter_lines = []
-                    for tag, letter in (("user→你", latest_user), ("你→user", latest_ai)):
+                    letter_sources = []
+                    for tag, section, letter in (
+                        ("user→你", "letter:user", latest_user),
+                        ("你→user", "letter:ai", latest_ai),
+                    ):
                         if letter is None:
                             continue
                         d = letter["metadata"].get("letter_date") or letter["metadata"].get("created", "")[:10]
@@ -187,8 +267,11 @@ def register(mcp) -> None:
                         letter_lines.append(
                             f"💌 [{tag}] {d}{(' · ' + title) if title else ''}\n{excerpt}"
                         )
+                        letter_sources.append((letter, section))
                     if letter_lines:
                         body_text += "\n\n=== 最近的信 ===\n" + "\n\n".join(letter_lines)
+                        for letter, section in letter_sources:
+                            _record_breath_source(provenance, letter, section)
             except Exception as e:
                 logger.warning(f"breath_hook letter section failed: {e}")
 
@@ -204,6 +287,7 @@ def register(mcp) -> None:
                         key=lambda b: b["metadata"].get("created", ""), reverse=True
                     )
                     self_lines = []
+                    self_sources = []
                     for b in self_buckets[:3]:
                         meta = b["metadata"]
                         ts = (meta.get("created") or "")[:10]
@@ -214,13 +298,23 @@ def register(mcp) -> None:
                         aspect_label = f" [{aspect_tag}]" if aspect_tag else ""
                         excerpt = strip_wikilinks(b["content"])[:300]
                         self_lines.append(f"🪞{ts}{aspect_label}\n{excerpt}")
+                        self_sources.append(b)
                     if self_lines:
                         body_text += "\n\n=== I ===\n" + "\n\n".join(self_lines)
+                        for bucket in self_sources:
+                            _record_breath_source(provenance, bucket, "i/self")
             except Exception as e:
                 logger.warning(f"breath_hook I section failed: {e}")
 
             await sh.fire_webhook("breath_hook", {"surfaced": len(parts), "chars": len(body_text)})
-            return PlainTextResponse(body_text)
+            headers = {}
+            try:
+                encoded = _encode_breath_provenance(provenance)
+                if encoded:
+                    headers[BREATH_PROVENANCE_HEADER] = encoded
+            except Exception as e:
+                logger.warning(f"breath provenance encoding failed: {e}")
+            return PlainTextResponse(body_text, headers=headers)
         except Exception as e:
             logger.warning(f"Breath hook failed: {e}")
             return PlainTextResponse("")
