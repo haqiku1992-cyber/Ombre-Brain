@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-ENTRYPOINT = Path(__file__).resolve().parents[1] / "entrypoint.sh"
+ENTRYPOINT = Path(__file__).resolve().parents[1] / "railway_restore_entrypoint.sh"
 
 
 class RestoreEntrypointTests(unittest.TestCase):
@@ -36,9 +36,7 @@ class RestoreEntrypointTests(unittest.TestCase):
 
     def run_entrypoint(self, mode, *, expected=None):
         env = dict(self.env)
-        env["OMBRE_MIGRATION_MODE"] = mode
-        if expected is not None:
-            env["OMBRE_MIGRATION_EXPECTED_VERSION"] = expected
+        env["OMBRE_RAILWAY_RESTORE_MODE"] = mode
         return subprocess.run(
             ["sh", str(ENTRYPOINT)],
             cwd=self.root, env=env, text=True, capture_output=True, timeout=5,
@@ -70,7 +68,7 @@ class RestoreEntrypointTests(unittest.TestCase):
             for name in ("src/server.py", "frontend/dashboard.html", "VERSION",
                          ".seeded_image_version", ".seeded_image_hash")
         }
-        result = self.run_entrypoint("preserve", expected="3.6.14")
+        result = self.run_entrypoint("app")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.marker.read_text().strip(), "src/server.py")
         for name, original in before.items():
@@ -78,30 +76,27 @@ class RestoreEntrypointTests(unittest.TestCase):
         self.assertFalse((self.code / ".boot_fails").exists())
 
     def test_preserve_refuses_wrong_version(self):
-        self.populate_restored_code()
-        result = self.run_entrypoint("preserve", expected="2.4.15")
+        self.populate_restored_code(version="2.4.15")
+        result = self.run_entrypoint("app")
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("version mismatch", result.stderr)
+        self.assertIn("expected restored code v3.6.14", result.stderr)
         self.assertFalse(self.marker.exists())
-        self.assertEqual((self.code / "VERSION").read_text().strip(), "3.6.14")
+        self.assertEqual((self.code / "VERSION").read_text().strip(), "2.4.15")
 
-    def test_preserve_refuses_missing_files_and_missing_expected_version(self):
+    def test_preserve_refuses_missing_files(self):
         self.populate_restored_code()
-        for expected, missing in ((None, None), ("3.6.14", "src/server.py")):
-            with self.subTest(expected=expected, missing=missing):
-                target = self.code / missing if missing else None
-                if target:
-                    target.rename(target.with_suffix(".hold"))
-                result = self.run_entrypoint("preserve", expected=expected)
-                self.assertNotEqual(result.returncode, 0)
-                self.assertFalse(self.marker.exists())
-                if target:
-                    target.with_suffix(".hold").rename(target)
+        target = self.code / "src/server.py"
+        target.rename(target.with_suffix(".hold"))
+        result = self.run_entrypoint("app")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("restored data/code incomplete", result.stderr)
+        self.assertFalse(self.marker.exists())
+        target.with_suffix(".hold").rename(target)
 
     def test_unknown_mode_refused_without_writes(self):
         result = self.run_entrypoint("unexpected")
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("unknown OMBRE_MIGRATION_MODE", result.stderr)
+        self.assertIn("unknown OMBRE_RAILWAY_RESTORE_MODE", result.stderr)
         self.assertFalse(self.marker.exists())
         self.assertFalse(self.config.parent.exists())
 
