@@ -1,0 +1,27 @@
+name: Railway OB restored overlay guard
+
+on:
+  push:
+    branches:
+      - fix/railway-restore-overlay-guard
+  pull_request:
+    paths:
+      - entrypoint.sh
+      - tests/test_railway_restore_entrypoint.py
+      - .github/workflows/railway-ob-restore-guard.yml
+
+permissions:
+  contents: read
+
+jobs:
+  restore-guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Validate entrypoint syntax
+        run: sh -n entrypoint.sh
+      - name: Verify migration fail-closed modes (synthetic only)
+        run: python3 -B -m unittest discover -s tests -p test_railway_restore_entrypoint.py -v
