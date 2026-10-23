@@ -6,7 +6,8 @@ on:
       - fix/railway-restore-overlay-guard
   pull_request:
     paths:
-      - entrypoint.sh
+      - railway_restore_entrypoint.sh
+      - Dockerfile.railway-restore
       - tests/test_railway_restore_entrypoint.py
       - .github/workflows/railway-ob-restore-guard.yml
 
@@ -22,6 +23,6 @@ jobs:
         with:
           persist-credentials: false
       - name: Validate entrypoint syntax
-        run: sh -n entrypoint.sh
+        run: sh -n railway_restore_entrypoint.sh
       - name: Verify migration fail-closed modes (synthetic only)
         run: python3 -B -m unittest discover -s tests -p test_railway_restore_entrypoint.py -v
