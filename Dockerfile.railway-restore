@@ -1,0 +1,11 @@
+# Migration-specific runtime only: same upstream version as restored _app.
+# Pinned multi-platform OCI digest, not mutable :latest.
+FROM p0luz/ombre-brain:3.6.14@sha256:25258dadd0000fec7772ebf86a8c4621b8afe0f4f121f34ca114088c67313967
+
+COPY railway_restore_entrypoint.sh /usr/local/bin/railway-restore-entrypoint
+RUN chmod 0755 /usr/local/bin/railway-restore-entrypoint
+
+# The upstream ENTRYPOINT would reseed /app/buckets/_app on image drift;
+# this wrapper defaults to WAIT and only ever runs restored source on
+# OMBRE_RAILWAY_RESTORE_MODE=app (a separately authorized cutover).
+ENTRYPOINT ["/usr/local/bin/railway-restore-entrypoint"]
