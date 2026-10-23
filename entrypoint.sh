@@ -20,44 +20,6 @@
 #   4. 删成功（路径已不存在）→ 从内置默认模板初始化一份。
 #   5. 最终校验：路径必须是普通文件，否则打印清晰指引并 FATAL 退出（不带病启动）。
 
-# Opt-in restore fence. Docker ENTRYPOINT runs even when Railway startCommand is
-# overridden; these modes prevent either accidental OB startup or reseeding the
-# 3.6.14 hot-update code preserved inside a migrated /app/buckets volume.
-# Default (unset) is deliberately identical to pre-migration behavior.
-case "${OMBRE_MIGRATION_MODE:-}" in
-    wait)
-        echo "[entrypoint] migration maintenance WAIT: no OB app or volume bootstrap"
-        exec python -c 'import threading; threading.Event().wait()'
-        ;;
-    preserve)
-        _restore_config="${OMBRE_CONFIG_PATH:-/app/buckets/config.yaml}"
-        _restore_code="${OMBRE_CODE_DIR:-$(dirname "$_restore_config")/_app}"
-        _restore_expected="${OMBRE_MIGRATION_EXPECTED_VERSION:-}"
-        if [ -z "$_restore_expected" ] ||
-           [ ! -f "$_restore_config" ] ||
-           [ ! -f "$_restore_code/VERSION" ] ||
-           [ ! -f "$_restore_code/src/server.py" ] ||
-           [ ! -f "$_restore_code/frontend/dashboard.html" ]; then
-            echo "[entrypoint] REFUSED: restored OB config/code or expected version missing" >&2
-            exit 1
-        fi
-        _restore_actual="$(cat "$_restore_code/VERSION")"
-        if [ "$_restore_actual" != "$_restore_expected" ]; then
-            echo "[entrypoint] REFUSED: restored OB code version mismatch" >&2
-            exit 1
-        fi
-        echo "[entrypoint] migration preserve: running volume code without reseeding"
-        cd "$_restore_code" || exit 1
-        exec python src/server.py
-        ;;
-    "")
-        ;;
-    *)
-        echo "[entrypoint] REFUSED: unknown OMBRE_MIGRATION_MODE" >&2
-        exit 1
-        ;;
-esac
-
 CONFIG="${OMBRE_CONFIG_PATH:-/app/config.yaml}"
 DEFAULT=/app/config.default.yaml
 
