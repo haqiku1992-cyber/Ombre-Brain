@@ -79,13 +79,41 @@ not establish final app-wide atomic state across all writers.
 - Synthetic GitHub CI 14 prebackup + 9 inert restore + 7 startup guard tests
   passed. Check exact latest PR head and CI before running.
 
+## 2026-10-25 Qiye Railway inert restore + image build checkpoint
+
+- Operator executed the pinned restore script in private Railway Console:
+  `ARCHIVE_VERIFY=PASS`, `FILES_VERIFIED=924`,
+  `RESTORE_APPLIED=True`, `FILES_RESTORED=924`,
+  `DB_QUICK_CHECK=2/2 PASS`, `OB_STARTED=False`, `CUTOVER_ELIGIBLE=False`.
+- Private leaf `/app/buckets/.qiye-prebackup-verified-20261025/restored`
+  holds all 924 prebackup files; original upload archive remains intact.
+  **The data is NOT at live OB root yet**, so app-mode should still fail.
+- CI built the pinned 3.6.13 image successfully and checked all imported
+  runtime dependencies and WAIT guard. Changes to target Railway service
+  must first be STAGED and individually audited; the only permitted next
+  deployment is `Dockerfile.railway-qiye-restore` with start command
+  `sh /usr/local/bin/railway-qiye-restore-entrypoint`,
+  no public domain and **no app-mode variable**.
+- The target presently runs only the temporary `python:3.12-slim-bookworm`
+  plus `sleep infinity`. Do NOT repoint Chiaros, run hold/grow/trace,
+  or copy live production credentials before final frozen snapshot and
+  approved verification steps.
+
 ## Inert Railway restore / cutover gates (not yet approved)
 
 1. Preserve original persisted `_app` v3.6.13. NEVER run the old seeded
    2.4.15 fork image's entrypoint on the restored volume.
-2. Independently obtain and verify the upstream **3.6.13** OCI image's
-   immutable digest and dependency suitability before creating a Dockerfile.
-   This PR intentionally provides no Dockerfile or app activation.
+2. Source operator verified the upstream OCI index digest for **3.6.13**
+   with Docker Registry HTTP digest and local SHA-256:
+   `sha256:3284dd935f3a6ad1b819f9b2e5a92033d58b962871548988b1460831929f211e`.
+   Linux AMD64 child manifest SHA-256 was
+   `7a36ccfb2d831803641ce9ed10a6905700ea067c3848499d5a1bf2250c124ac1`.
+   Dedicated `Dockerfile.railway-qiye-restore` pins the verified upstream
+   **multi-platform index**, not a mutable tag, and REPLACES the upstream
+   reseeding entrypoint with `railway_qiye_restore_entrypoint.sh`.
+   GitHub CI builds the **real pinned image** and checks core imports,
+   `/app/VERSION=3.6.13`, entrypoint override and default WAIT environment.
+   This does NOT justify starting OB before the final source write freeze.
 3. Apply staged empty service/volume only after review; restore privately
    to inert volume. Verify archive member SHA, source/identity, config,
    original overlay, both SQLite DBs and read-only memory retrieval.
