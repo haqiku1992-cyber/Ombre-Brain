@@ -25,6 +25,7 @@ Do not merge into the active Shadow OB runtime or reuse its volume.
     python -m unittest discover -s tests -p 'test_railway_qiye_restore_entrypoint.py' -v
     python -m py_compile tools/qiye_ob_prebackup.py
     sh -n railway_qiye_restore_entrypoint.sh
+    python -m unittest discover -s tests -p 'test_qiye_ob_inert_restore.py' -v
 
 Do not execute in production before code review and CI pass. The CLI's
 default is identity/mount/version and read-only file-inventory PRECHECK:
@@ -54,6 +55,29 @@ changes during snapshot, observed concurrent SQLite commits and pre-existing
 output. SQLite DBs use Online Backup API and quick_check. The archive
 always has `cutover_eligible=false`: even successful live prebackup does
 not establish final app-wide atomic state across all writers.
+
+## Current on-site checkpoint, 2026-10-25
+
+- Railway dedicated `Ombre-Brain-Qiye` volume **exists in Singapore**; a
+  generic standby `python:3.12-slim-bookworm` with `sleep infinity` is active
+  only for upload and private Console file access. **OB has NOT started.**
+- Source online PREBACKUP copied via browser Files into dedicated
+  `/app/buckets/qiye-ob-prebackup.tar.gz`; source, Windows and Railway hashes
+  match `f51816be535a0b7f4b970336fb2bb8cf4b59d90019564cae9d67c0ec90294501`,
+  size 5,895,162 bytes, 924 files. The operator separately ran full remote
+  archive content verification: `ARCHIVE_READONLY_VERIFY=PASS`,
+  `FILES_VERIFIED=924`, `RUNTIME_VERSION=3.6.13`,
+  `RESTORE_APPLIED=False`.
+- The optional next step uses `tools/qiye_ob_inert_restore.py` pinned to the
+  reviewed PR head. Default is read-only. Explicit `--apply` independently
+  verifies the full tar and hashes, refuses wrong Railway service ID or
+  missing mounted volume, extracts ONLY into a **fresh private
+  `/app/buckets/.qiye-prebackup-verified-20261025/restored`** directory,
+  runs read-only SQLite quick_check for two DBs and checks file hashes
+  before publishing the staging leaf. The original tar, `lost+found`,
+  and root-level OB data are untouched. NEVER extract into the volume root.
+- Synthetic GitHub CI 14 prebackup + 9 inert restore + 7 startup guard tests
+  passed. Check exact latest PR head and CI before running.
 
 ## Inert Railway restore / cutover gates (not yet approved)
 
