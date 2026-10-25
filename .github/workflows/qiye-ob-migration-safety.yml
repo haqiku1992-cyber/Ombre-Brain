@@ -8,6 +8,8 @@ on:
       - "tools/qiye_ob_inert_restore.py"
       - "tests/test_qiye_ob_inert_restore.py"
       - "railway_qiye_restore_entrypoint.sh"
+      - "Dockerfile.railway-qiye-restore"
+      - "tests/test_qiye_restore_dockerfile.py"
       - "tests/test_railway_qiye_restore_entrypoint.py"
       - "docs/RAILWAY_QIYE_OB_MIGRATION.md"
       - ".github/workflows/qiye-ob-migration-safety.yml"
@@ -18,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    timeout-minutes: 8
+    timeout-minutes: 18
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -26,10 +28,32 @@ jobs:
           python-version: "3.12"
       - name: Syntax and shell sanity
         run: |
-          python -m py_compile tools/qiye_ob_prebackup.py tools/qiye_ob_inert_restore.py tests/test_qiye_ob_prebackup.py tests/test_qiye_ob_inert_restore.py tests/test_railway_qiye_restore_entrypoint.py
+          python -m py_compile tools/qiye_ob_prebackup.py tools/qiye_ob_inert_restore.py tests/test_qiye_ob_prebackup.py tests/test_qiye_ob_inert_restore.py tests/test_railway_qiye_restore_entrypoint.py tests/test_qiye_restore_dockerfile.py
           sh -n railway_qiye_restore_entrypoint.sh
       - name: Synthetic tests only - no production network or secrets
         run: |
           python -m unittest discover -s tests -p 'test_qiye_ob_prebackup.py' -v
           python -m unittest discover -s tests -p 'test_qiye_ob_inert_restore.py' -v
           python -m unittest discover -s tests -p 'test_railway_qiye_restore_entrypoint.py' -v
+          python -m unittest discover -s tests -p 'test_qiye_restore_dockerfile.py' -v
+
+      - name: Build pinned Qiye standby image (no OB runtime)
+        run: |
+          docker build --pull --file Dockerfile.railway-qiye-restore \
+            --tag qiye-restore-guard:test .
+      - name: Smoke-test image's overlay-preserving guard and dependencies
+        run: |
+          docker run --rm --entrypoint sh qiye-restore-guard:test -ec '
+            test "$(cat /app/VERSION)" = "3.6.13"
+            test -x /usr/local/bin/railway-qiye-restore-entrypoint
+            python -c "import mcp, rapidfuzz, openai, yaml, frontmatter, httpx, numpy, sklearn"
+          '
+          python - <<'PY'
+          import json, subprocess
+          data = json.loads(subprocess.check_output(
+              ["docker", "image", "inspect", "qiye-restore-guard:test"], text=True
+          ))[0]["Config"]
+          assert data["Entrypoint"] == ["/usr/local/bin/railway-qiye-restore-entrypoint"]
+          assert "OMBRE_RAILWAY_RESTORE_MODE=wait" in data["Env"]
+          print("PINNED_IMAGE_WAIT_GUARD=PASS")
+          PY
