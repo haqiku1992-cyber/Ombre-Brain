@@ -12,7 +12,10 @@ import argparse
 import hashlib
 import json
 import os
+import signal
 import socket
+import time
+from contextlib import contextmanager
 import sqlite3
 import stat
 import tarfile
@@ -25,6 +28,7 @@ DB_NAMES = frozenset({"embeddings.db", "dehydration_cache.db"})
 MAX_FILES = 20000
 MAX_BYTES = 1024 * 1024 * 1024
 BLOCK = 1024 * 1024
+MIN_FREE_BYTES = 64 * 1024 * 1024
 
 
 class Refusal(RuntimeError):
@@ -169,7 +173,41 @@ def verify_archive(
                 raise Refusal("archive_digest_failure")
 
 
-def prebackup(root: Path, target: Path) -> dict[str, object]:
+@contextmanager
+def bounded_capture(max_seconds: int):
+    """Bound all capture stages on Linux (Zeabur CLI main thread only)."""
+    if not (10 <= max_seconds <= 900):
+        raise Refusal("invalid_max_seconds")
+    if not hasattr(signal, "setitimer"):
+        raise Refusal("linux_timeout_support_required")
+    previous_handler = signal.getsignal(signal.SIGALRM)
+    if previous_handler != signal.SIG_DFL:
+        raise Refusal("preexisting_alarm_handler")
+
+    def on_timeout(_signum, _frame):
+        raise Refusal("prebackup_time_limit")
+
+    signal.signal(signal.SIGALRM, on_timeout)
+    previous = signal.setitimer(signal.ITIMER_REAL, max_seconds)
+    try:
+        if previous[0] > 0:
+            raise Refusal("preexisting_alarm_timer")
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
+
+
+def capacity_preflight(target: Path, source_bytes: int, file_count: int) -> None:
+    statvfs = os.statvfs(target.parent)
+    free_bytes = statvfs.f_bavail * statvfs.f_frsize
+    free_inodes = statvfs.f_favail
+    required_bytes = max(MIN_FREE_BYTES, source_bytes * 4)
+    if free_bytes < required_bytes or (free_inodes and free_inodes < 2 * file_count + 100):
+        raise Refusal("insufficient_private_staging_capacity")
+
+
+def prebackup(root: Path, target: Path, max_seconds: int = 180) -> dict[str, object]:
     """Capture one stable filesystem interval and transactionally backed-up DBs.
 
     This DOES NOT claim that an active write was frozen or that prebackup can be
@@ -184,6 +222,7 @@ def prebackup(root: Path, target: Path) -> dict[str, object]:
     validate_source(root)
     baseline = inspect(root)
     original_dirs = inspect_directories(root)
+    capacity_preflight(target, sum(v[0] for v in baseline.values()), len(baseline))
     dbs = open_sources(root)
     try:
         with tempfile.TemporaryDirectory(prefix=".qiye-ob-stage-", dir=target.parent) as stage_str:
@@ -193,13 +232,21 @@ def prebackup(root: Path, target: Path) -> dict[str, object]:
             # Create every source directory (including empty leaves) before copying.
             for rel in sorted(original_dirs, key=lambda name: (name.count("/"), name)):
                 (files_dir / rel).mkdir(parents=True, exist_ok=True)
+            deadline = time.monotonic() + max_seconds
+
+            def check_deadline(*_args):
+                if time.monotonic() >= deadline:
+                    raise Refusal("prebackup_time_limit")
+
             for rel, (_, _, sha, _) in baseline.items():
+                check_deadline()
                 if rel not in DB_NAMES:
                     copy_one(root / rel, files_dir / rel, sha)
             for name, (src, _) in dbs.items():
                 destination = sqlite3.connect(files_dir / name)
                 try:
-                    src.backup(destination, pages=128, sleep=0.05)
+                    src.backup(destination, pages=128, sleep=0.05,
+                               progress=check_deadline)
                     if destination.execute("PRAGMA quick_check").fetchone()[0] != "ok":
                         raise Refusal("backup_sqlite_integrity_failed")
                 finally:
@@ -225,6 +272,7 @@ def prebackup(root: Path, target: Path) -> dict[str, object]:
                     raise Refusal("sqlite_committed_during_backup")
             hashes = {}
             for path in sorted(files_dir.rglob("*")):
+                check_deadline()
                 if path.is_file():
                     name = "files/" + path.relative_to(files_dir).as_posix()
                     hashes[name] = digest(path)
@@ -256,15 +304,21 @@ def prebackup(root: Path, target: Path) -> dict[str, object]:
             archive = stage / "archive.tar.gz"
             with tarfile.open(archive, mode="w:gz", dereference=False) as tar:
                 for member in sorted(set(hashes) | set(expected_dirs)):
+                    check_deadline()
                     path = stage / member
                     tar.add(path, arcname=member, recursive=False)
             verify_archive(archive, hashes, expected_dirs)
+            check_deadline()
             os.chmod(archive, 0o600)  # Protect private contents even outside CLI.
-            # No-clobber publication: link fails if destination appeared.
+            archive_sha = digest(archive)
+            archive_size = archive.stat().st_size
+            check_deadline()
+            # No-clobber publication is the last operation: no file is exposed
+            # until digest and complete tar verification have succeeded.
             os.link(archive, target)
             return {
-                "archive_sha256": digest(target),
-                "archive_bytes": target.stat().st_size,
+                "archive_sha256": archive_sha,
+                "archive_bytes": archive_size,
                 "source_files": len(baseline),
                 "cutover_eligible": False,
             }
@@ -279,6 +333,7 @@ def main() -> int:
     parser.add_argument("--output", type=Path)
     parser.add_argument("--create", action="store_true")
     parser.add_argument("--ack-private-plaintext-archive", action="store_true")
+    parser.add_argument("--max-seconds", type=int, default=180)
     args = parser.parse_args()
     old_umask = os.umask(0o077)
     try:
@@ -291,7 +346,8 @@ def main() -> int:
             return 0
         if not args.ack_private_plaintext_archive or args.output is None:
             raise Refusal("explicit_private_archive_confirmation_required")
-        outcome = prebackup(args.root, args.output)
+        with bounded_capture(args.max_seconds):
+            outcome = prebackup(args.root, args.output, max_seconds=args.max_seconds)
         print("PREBACKUP_CREATED=True")
         for k, v in outcome.items():
             print(k, "=", v)
