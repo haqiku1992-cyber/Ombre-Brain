@@ -127,6 +127,45 @@ class QiyePrebackupTests(unittest.TestCase):
                 backup.prebackup(self.root, self.output())
         self.assertFalse(self.output().exists())
 
+    def test_empty_directories_and_metadata_survive(self):
+        empty_dir = self.root / "unused" / "empty"
+        empty_dir.mkdir(parents=True)
+        os.chmod(empty_dir, 0o750)
+        source_file = self.root / "one.md"
+        os.chmod(source_file, 0o640)
+        source_time_ns = 1_700_000_000_000_000_000
+        os.utime(source_file, ns=(source_time_ns, source_time_ns))
+        out = self.output()
+        backup.prebackup(self.root, out)
+        with tarfile.open(out, "r:gz") as tar:
+            files = {m.name: m for m in tar.getmembers()}
+            self.assertTrue(files["files/unused/empty"].isdir())
+            self.assertEqual(files["files/unused/empty"].mode, 0o750)
+            self.assertEqual(files["files/one.md"].mode, 0o640)
+            self.assertAlmostEqual(
+                files["files/one.md"].mtime,
+                source_time_ns / 1_000_000_000,
+                delta=1.0,
+            )
+            manifest = json.load(tar.extractfile("manifest.json"))
+            self.assertIn("files/unused/empty", manifest["directories"])
+
+    def test_directory_changes_during_copy_fail_closed(self):
+        original = backup.copy_one
+        changed = False
+
+        def concurrent_directory_change(src, dst, sha):
+            nonlocal changed
+            original(src, dst, sha)
+            if not changed and src.name == "one.md":
+                changed = True
+                (self.root / "new_empty_dir").mkdir()
+
+        with mock.patch.object(backup, "copy_one", side_effect=concurrent_directory_change):
+            with self.assertRaisesRegex(backup.Refusal, "source_directories_changed"):
+                backup.prebackup(self.root, self.output())
+        self.assertFalse(self.output().exists())
+
     def test_source_mount_required(self):
         with mock.patch.object(backup.os.path, "ismount", return_value=False):
             with self.assertRaisesRegex(backup.Refusal, "volume_mount_required"):
