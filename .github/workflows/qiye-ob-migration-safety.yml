@@ -7,6 +7,7 @@ on:
       - "tests/test_qiye_ob_prebackup.py"
       - "railway_qiye_restore_entrypoint.sh"
       - "tests/test_railway_qiye_restore_entrypoint.py"
+      - "docs/RAILWAY_QIYE_OB_MIGRATION.md"
       - ".github/workflows/qiye-ob-migration-safety.yml"
   workflow_dispatch:
 
