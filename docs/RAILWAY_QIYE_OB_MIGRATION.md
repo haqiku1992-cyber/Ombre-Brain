@@ -11,6 +11,11 @@ Do not merge into the active Shadow OB runtime or reuse its volume.
 - First inventory: 920 files, 23,905,477 B, 90 Markdown; both databases
   passed SQLite read-only quick_check.
 - This source is LIVE: chat and background writers may modify it.
+- Railway Chiaros live OB settings have been verified through a private
+  terminal: both URL and MCP URL resolve to host
+  `haqiku-chiaros-brain.zeabur.app` (MCP path `/mcp`), with
+  `OMBRE_BRAIN_TOOLS_ENABLED=true`. This is pre-cutover source routing;
+  the bearer tokens and provider keys were not read or copied.
 - Railway pending target (not deployed): `Ombre-Brain-Qiye` with a dedicated
   1 GB volume at `/app/buckets`, in `reliable-warmth`.
 
