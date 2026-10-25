@@ -144,7 +144,7 @@ def prebackup(root: Path, target: Path) -> dict[str, object]:
     used as the final authoritative cutover state.
     """
     root = root.resolve(strict=True)
-    target = target.absolute()
+    target = target.resolve(strict=False)
     if root == target or root in target.parents:
         raise Refusal("output_inside_source")
     if not target.parent.is_dir() or target.exists() or target.is_symlink():
@@ -203,6 +203,7 @@ def prebackup(root: Path, target: Path) -> dict[str, object]:
                     path = stage / member
                     tar.add(path, arcname=member, recursive=False)
             verify_archive(archive, hashes)
+            os.chmod(archive, 0o600)  # Protect private contents even outside CLI.
             # No-clobber publication: link fails if destination appeared.
             os.link(archive, target)
             return {
