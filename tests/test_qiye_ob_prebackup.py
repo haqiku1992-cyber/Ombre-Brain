@@ -166,6 +166,29 @@ class QiyePrebackupTests(unittest.TestCase):
                 backup.prebackup(self.root, self.output())
         self.assertFalse(self.output().exists())
 
+    def test_low_disk_capacity_rejected_without_artifact(self):
+        from types import SimpleNamespace
+        no_space = SimpleNamespace(f_bavail=0, f_frsize=4096, f_favail=1000000)
+        with mock.patch.object(backup.os, "statvfs", return_value=no_space):
+            with self.assertRaisesRegex(
+                backup.Refusal, "insufficient_private_staging_capacity"
+            ):
+                backup.prebackup(self.root, self.output())
+        self.assertFalse(self.output().exists())
+
+    def test_invalid_timeout_refused(self):
+        with self.assertRaisesRegex(backup.Refusal, "invalid_max_seconds"):
+            with backup.bounded_capture(1):
+                pass
+
+    def test_archive_verification_error_leaves_no_published_file(self):
+        with mock.patch.object(
+            backup, "verify_archive", side_effect=backup.Refusal("failed_archive")
+        ):
+            with self.assertRaisesRegex(backup.Refusal, "failed_archive"):
+                backup.prebackup(self.root, self.output())
+        self.assertFalse(self.output().exists())
+
     def test_source_mount_required(self):
         with mock.patch.object(backup.os.path, "ismount", return_value=False):
             with self.assertRaisesRegex(backup.Refusal, "volume_mount_required"):
