@@ -5,6 +5,8 @@ on:
     paths:
       - "tools/qiye_ob_prebackup.py"
       - "tests/test_qiye_ob_prebackup.py"
+      - "tools/qiye_ob_inert_restore.py"
+      - "tests/test_qiye_ob_inert_restore.py"
       - "railway_qiye_restore_entrypoint.sh"
       - "tests/test_railway_qiye_restore_entrypoint.py"
       - "docs/RAILWAY_QIYE_OB_MIGRATION.md"
@@ -24,9 +26,10 @@ jobs:
           python-version: "3.12"
       - name: Syntax and shell sanity
         run: |
-          python -m py_compile tools/qiye_ob_prebackup.py tests/test_qiye_ob_prebackup.py tests/test_railway_qiye_restore_entrypoint.py
+          python -m py_compile tools/qiye_ob_prebackup.py tools/qiye_ob_inert_restore.py tests/test_qiye_ob_prebackup.py tests/test_qiye_ob_inert_restore.py tests/test_railway_qiye_restore_entrypoint.py
           sh -n railway_qiye_restore_entrypoint.sh
       - name: Synthetic tests only - no production network or secrets
         run: |
           python -m unittest discover -s tests -p 'test_qiye_ob_prebackup.py' -v
+          python -m unittest discover -s tests -p 'test_qiye_ob_inert_restore.py' -v
           python -m unittest discover -s tests -p 'test_railway_qiye_restore_entrypoint.py' -v
