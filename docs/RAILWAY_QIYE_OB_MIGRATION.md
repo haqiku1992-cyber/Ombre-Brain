@@ -35,13 +35,18 @@ After separate operator approval ONLY, with adequate disk capacity and a
 secure off-server encrypted export/retrieval plan, create a prebackup:
 
     python -I -B tools/qiye_ob_prebackup.py \
-      --create --ack-private-plaintext-archive \
+      --create --ack-private-plaintext-archive --max-seconds 180 \
       --output /tmp/qiye-ob-prebackup-UNIQUE.tar.gz
 
 **The archive is sensitive plaintext**: it includes memory, config, indexed
 content and potentially secrets. Do not post it or its manifest to GitHub,
 this chat, logs or a public site. /tmp is not durable offsite storage.
 Independently export encrypted, verify hashes and test archive retrieval.
+
+The prebackup checks available staging free space/inodes before copying,
+retains directory structure (including empty directories), source modes and
+modification times, and has a bounded total runtime (default 180 seconds).
+If any check fails, no unverified archive is published.
 
 The code refuses wrong Zeabur service, missing mounted volume, unexpected
 overlay version, unknown SQLite database/sidecars, symlinks/special files,
