@@ -55,7 +55,7 @@ class LogicalComparisonTests(unittest.TestCase):
         with make_database([(1, b"alpha")]) as before:
             with make_database([(1, b"alpha")]) as after:
                 after.execute("CREATE TABLE additional (id INTEGER)")
-                result = tool.compare_databases(before, after)
+                result = tool.compare_databases(after, before)
                 self.assertFalse(result["LOGICAL_ROWS_MATCH"])
                 self.assertFalse(result["SCHEMA_MATCH"])
                 self.assertEqual(result["PHYSICAL_TABLES_ADDED"], 1)
