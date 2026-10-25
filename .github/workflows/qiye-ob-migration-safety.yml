@@ -1,0 +1,31 @@
+name: Qiye OB migration safety (offline)
+
+on:
+  pull_request:
+    paths:
+      - "tools/qiye_ob_prebackup.py"
+      - "tests/test_qiye_ob_prebackup.py"
+      - "railway_qiye_restore_entrypoint.sh"
+      - "tests/test_railway_qiye_restore_entrypoint.py"
+      - ".github/workflows/qiye-ob-migration-safety.yml"
+  workflow_dispatch:
+
+jobs:
+  synthetic-safety:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Syntax and shell sanity
+        run: |
+          python -m py_compile tools/qiye_ob_prebackup.py tests/test_qiye_ob_prebackup.py tests/test_railway_qiye_restore_entrypoint.py
+          sh -n railway_qiye_restore_entrypoint.sh
+      - name: Synthetic tests only - no production network or secrets
+        run: |
+          python -m unittest discover -s tests -p 'test_qiye_ob_prebackup.py' -v
+          python -m unittest discover -s tests -p 'test_railway_qiye_restore_entrypoint.py' -v
