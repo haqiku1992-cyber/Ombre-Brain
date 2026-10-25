@@ -1,0 +1,16 @@
+# 栖野 Qiye OB only. Source bytes and overlay must remain 3.6.13.
+# Operator independently verified the upstream multi-platform OCI index digest
+# and linux/amd64 child digest against Docker Registry on 2026-10-25.
+# Pin by immutable index digest, never mutable tag-only / :latest.
+FROM p0luz/ombre-brain:3.6.13@sha256:3284dd935f3a6ad1b819f9b2e5a92033d58b962871548988b1460831929f211e
+
+COPY railway_qiye_restore_entrypoint.sh /usr/local/bin/railway-qiye-restore-entrypoint
+RUN chmod 0755 /usr/local/bin/railway-qiye-restore-entrypoint
+
+# Upstream /app/entrypoint.sh can RESEED the persisted /app/buckets/_app
+# when its original seed marker differs from the hot-updated runtime.
+# Never call it, and never install source code into the volume in Dockerfile.
+# Existing restored prebackup is currently inert under a separate staging leaf;
+# do not promote it or start the app as a consequence of this image deployment.
+ENV OMBRE_RAILWAY_RESTORE_MODE=wait
+ENTRYPOINT ["/usr/local/bin/railway-qiye-restore-entrypoint"]
